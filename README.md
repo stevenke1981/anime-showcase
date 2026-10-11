@@ -1,6 +1,6 @@
 # Rust 網頁滾動動畫圖鑑 (anim-showcase)
 
-用 Rust + eframe/egui 做的桌面程式，把常見的「流行網頁滾動動畫」一個一個示範出來，並標上**日文／英文／繁體中文**名稱，方便你用正確的術語向 AI 下指令。
+用 Rust + eframe/egui 做的桌面程式，把常見的「流行網頁滾動動畫」以及影片剪輯、動畫（アニメ）、電影常見特效一個一個示範出來，並標上**日文／英文／繁體中文**名稱，方便你用正確的術語向 AI 下指令。
 
 ## 執行
 ```bash
@@ -8,7 +8,9 @@ cargo run --release
 ```
 往下捲動，區塊進入畫面時會播放動畫；部分效果（視差、縮放、文字填色、橫向捲動等）跟著捲動位置變化。上方「Replay 重播」可重播，「Scroll snap」可開啟吸附；懸停類效果請把滑鼠移上去。
 
-## 動畫術語一覽
+## 動畫術語一覽（共 91 種，分 5 類）
+
+### 🌐 網頁滾動動畫 Web scroll
 | # | 繁體中文 | English | 日本語 |
 |---|---|---|---|
 | 01 | 淡入 | Fade-in | フェードイン |
@@ -28,6 +30,10 @@ cargo run --release
 | 15 | 固定／釘選 | Sticky / Pinning | スティッキー |
 | 16 | 滾動吸附 | Scroll snap | スクロールスナップ |
 | 17 | 跑馬燈／無限循環 | Marquee / Infinite loop | マーキー |
+
+### ✨ 網頁互動／微動畫 UI micro-interactions
+| # | 繁體中文 | English | 日本語 |
+|---|---|---|---|
 | 18 | 放大進場 | Zoom-in | ズームイン |
 | 19 | 翻轉／旋轉進場 | Flip / Rotate-in | フリップイン |
 | 20 | 彈跳 | Bounce | バウンス |
@@ -57,8 +63,69 @@ cargo run --release
 | 44 | 懸停顯示圖片 | Reveal-on-hover image | ホバー画像リビール |
 | 45 | 交錯網格 | Staggered grid | スタッガーグリッド |
 
+### 🎬 影片剪輯效果 Video editing
+| # | 繁體中文 | English | 日本語 |
+|---|---|---|---|
+| 46 | 交叉溶接 | Cross dissolve | クロスディゾルブ |
+| 47 | 淡出至黑 | Fade to black | フェードアウト（黒） |
+| 48 | 甩鏡轉場 | Whip pan | ウィップパン |
+| 49 | 縮放轉場 | Zoom transition | ズームトランジション |
+| 50 | 肯·伯恩斯效果 | Ken Burns effect | ケン・バーンズ |
+| 51 | 慢動作／變速 | Slow motion / Speed ramp | スピードランプ |
+| 52 | 定格畫面 | Freeze frame | フリーズフレーム |
+| 53 | 分割畫面 | Split screen | 分割画面 |
+| 54 | 子母畫面 | Picture-in-picture | ピクチャーインピクチャー |
+| 55 | 漏光 | Light leak | ライトリーク |
+| 56 | 底片顆粒 | Film grain | フィルムグレイン |
+| 57 | 暗角 | Vignette | ビネット |
+| 58 | 色差 | Chromatic aberration | 色収差 |
+| 59 | RGB 分離 | RGB split | RGBスプリット |
+| 60 | 電影黑邊 | Letterbox | レターボックス |
+| 61 | 調色／LUT | Color grading / LUT | カラーグレーディング |
+| 62 | 下方字幕條 | Lower third | ロワーサード |
+| 63 | 動態文字排版 | Kinetic typography | キネティックタイポグラフィ |
+| 64 | 匹配剪輯 | Match cut | マッチカット |
+
+### 🌸 動畫／漫畫效果 Anime
+| # | 繁體中文 | English | 日本語 |
+|---|---|---|---|
+| 65 | 集中線／速度線 | Speed lines | 集中線 |
+| 66 | 衝擊幀 | Impact frame | インパクトフレーム |
+| 67 | 拖影幀 | Smear frame | スメアフレーム |
+| 68 | 畫面震動 | Screen shake | 画面揺れ |
+| 69 | 櫻花飄落 | Sakura particles | 桜吹雪 |
+| 70 | Q版彈出 | Chibi pop | ちびポップ |
+| 71 | 汗滴 | Sweat drop | 汗マーク |
+| 72 | 怒氣符號 | Anger mark | 怒りマーク |
+| 73 | 閃亮光芒 | Kira sparkle | キラキラ |
+| 74 | 閃白 | Flash / White-out | ホワイトアウト |
+| 75 | 漫畫分格 | Manga panel frame | 漫画コマ |
+| 76 | 傾斜鏡頭 | Dutch angle | ダッチアングル |
+| 77 | 背景平移 | Background pan | 背景パン |
+| 78 | 過場卡 | Eyecatch | アイキャッチ |
+
+### 🎞 電影轉場與鏡頭 Film
+| # | 繁體中文 | English | 日本語 |
+|---|---|---|---|
+| 79 | 圓形擦除 | Iris wipe | アイリスワイプ |
+| 80 | 星形擦除 | Star wipe | スターワイプ |
+| 81 | 時鐘擦除 | Clock wipe | クロックワイプ |
+| 82 | 移焦 | Rack focus | ラックフォーカス |
+| 83 | 滑動變焦／眩暈效果 | Dolly zoom (Vertigo) | ドリーズーム |
+| 84 | 散景 | Bokeh | ボケ |
+| 85 | 鏡頭光暈 | Lens flare | レンズフレア |
+| 86 | 下雨疊加 | Rain overlay | 雨オーバーレイ |
+| 87 | CRT／錄影帶效果 | CRT / VHS | CRT／VHS |
+| 88 | 膠片故障 | Film glitch / burn | フィルムグリッチ |
+| 89 | 片尾字幕捲動 | Title credits roll | エンドロール |
+| 90 | 倒數片頭 | Countdown leader | カウントダウンリーダー |
+| 91 | 老電影閃爍刮痕 | Old film flicker / scratches | 古いフィルムのちらつき |
+
 ![](shots/01_fade_slide_stagger.png)
 ![](shots/03_extra_effects.png)
+![](shots/05_video_48-50.png)
+![](shots/07_anime_69-71.png)
+![](shots/09_film_86-88.png)
 
 ## 限制
-這是原生桌面程式，用 egui 模擬網頁效果：模糊、3D 傾斜、圖片序列、SVG 描線等都是近似畫法，並不是真正的 CSS/SVG。
+這是原生桌面程式，用 egui 模擬網頁效果：模糊、3D 傾斜、圖片序列、SVG 描線、景深、鏡頭光暈、CRT 等都是近似畫法，並不是真正的 CSS/SVG。
