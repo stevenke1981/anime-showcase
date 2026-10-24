@@ -126,11 +126,16 @@ cargo run --release -- --goto 46   # 從 46 交叉溶接開始
 | 90 | 倒數片頭 | Countdown leader | カウントダウンリーダー |
 | 91 | 老電影閃爍刮痕 | Old film flicker / scratches | 古いフィルムのちらつき |
 
-![](shots/01_fade_slide_stagger.png)
-![](shots/03_extra_effects.png)
-![](shots/05_video_48-50.png)
-![](shots/07_anime_69-71.png)
-![](shots/09_film_86-88.png)
+## 截圖
+![](shots/after_home.png)
+![](shots/after_web.png)
+![](shots/after_video.png)
+![](shots/after_anime.png)
+![](shots/after_film.png)
+
+
+## 介面
+深色海軍藍主題、圓角卡片與柔和陰影、左側分類導覽（點擊跳轉）、頂部漸層進度條、編號徽章與中／英／日標題。
 
 ## 限制
 這是原生桌面程式，用 egui 模擬網頁效果：模糊、3D 傾斜、圖片序列、SVG 描線、景深、鏡頭光暈、CRT 等都是近似畫法，並不是真正的 CSS/SVG。

@@ -95,92 +95,196 @@ const SECTIONS: &[(&str, &str, &str, &str)] = &[
  ("91","古いフィルムのちらつき","Old film flicker / scratches","老電影閃爍刮痕"),
 ];
 
-fn ease(t: f32) -> f32 { let t = t.clamp(0.0, 1.0); 1.0 - (1.0 - t).powi(3) }
+fn ease(t: f32) -> f32 { let t = t.clamp(0.0, 1.0); 1.0 - (1.0 - t).powi(4) }
+#[allow(dead_code)]
+fn spring(t: f32) -> f32 { if t <= 0.0 { 0.0 } else { 1.0 - (-6.0 * t).exp() * (12.0 * t).cos() } }
 
 /// smoothing factor for frame-rate independent exponential easing
 fn damp(rate: f32, dt: f32) -> f32 { 1.0 - (-rate * dt).exp() }
 fn smoothstep(x: f32) -> f32 { let x = x.clamp(0.0, 1.0); x * x * (3.0 - 2.0 * x) }
 
-struct App { start: HashMap<usize, f64>, snap: bool, cur: usize, follow: Pos2, vel: f32, tops: Vec<f32>, jump: Option<usize> }
+struct App { start: HashMap<usize, f64>, snap: bool, cur: usize, cat_y: [f32; 5], cat_jump: Option<usize>, follow: Pos2, vel: f32, tops: Vec<f32>, jump: Option<usize> }
+
+const BG: Color32 = Color32::from_rgb(11, 14, 24);
+const PANEL: Color32 = Color32::from_rgb(16, 20, 34);
+const CARD: Color32 = Color32::from_rgb(23, 28, 46);
+const STAGE: Color32 = Color32::from_rgb(15, 19, 32);
+const ACCENT: Color32 = Color32::from_rgb(124, 140, 255);
+const ACCENT2: Color32 = Color32::from_rgb(77, 208, 225);
+const PINK: Color32 = Color32::from_rgb(244, 114, 182);
+const MINT: Color32 = Color32::from_rgb(110, 231, 183);
+const AMBER: Color32 = Color32::from_rgb(251, 191, 114);
+const TEXT: Color32 = Color32::from_rgb(232, 236, 248);
+const MUTED: Color32 = Color32::from_rgb(140, 150, 178);
+const CATS: [(usize, &str, &str, &str); 5] = [
+    (0, "🌐", "網頁滾動動畫", "Web scroll · スクロール"),
+    (17, "✨", "互動與微動畫", "UI micro-interactions · マイクロインタラクション"),
+    (45, "🎬", "影片剪輯效果", "Video editing · 映像編集"),
+    (64, "🌸", "動畫／漫畫效果", "Anime · アニメ演出"),
+    (78, "🎞", "電影轉場與鏡頭", "Film · 映画技法"),
+];
+
+fn grad_rect(p: &Painter, r: Rect, c1: Color32, c2: Color32) {
+    let mut m = Mesh::default();
+    m.colored_vertex(r.left_top(), c1); m.colored_vertex(r.right_top(), c2);
+    m.colored_vertex(r.right_bottom(), c2); m.colored_vertex(r.left_bottom(), c1);
+    m.add_triangle(0, 1, 2); m.add_triangle(0, 2, 3);
+    p.add(Shape::mesh(m));
+}
+
+fn theme(ctx: &Context) {
+    let mut v = Visuals::dark();
+    v.panel_fill = BG; v.window_fill = PANEL; v.extreme_bg_color = STAGE; v.faint_bg_color = CARD;
+    v.override_text_color = Some(TEXT);
+    v.selection.bg_fill = ACCENT.gamma_multiply(0.5);
+    v.hyperlink_color = ACCENT2;
+    for w in [&mut v.widgets.inactive, &mut v.widgets.hovered, &mut v.widgets.active, &mut v.widgets.noninteractive, &mut v.widgets.open] { w.rounding = Rounding::same(10.0); }
+    v.widgets.inactive.weak_bg_fill = Color32::from_rgb(32, 38, 62); v.widgets.inactive.bg_fill = Color32::from_rgb(32, 38, 62);
+    v.widgets.hovered.weak_bg_fill = Color32::from_rgb(48, 56, 92); v.widgets.hovered.bg_stroke = Stroke::new(1.0, ACCENT);
+    v.widgets.active.weak_bg_fill = ACCENT.gamma_multiply(0.6);
+    v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, Color32::from_rgb(36, 42, 66));
+    ctx.set_visuals(v);
+    let mut st = (*ctx.style()).clone();
+    st.spacing.item_spacing = vec2(10.0, 8.0); st.spacing.button_padding = vec2(14.0, 7.0);
+    st.text_styles.insert(TextStyle::Button, FontId::proportional(15.0));
+    st.text_styles.insert(TextStyle::Body, FontId::proportional(15.0));
+    ctx.set_style(st);
+}
 
 fn main() -> eframe::Result<()> {
-    let opts = eframe::NativeOptions { viewport: egui::ViewportBuilder::default().with_inner_size([1000.0, 760.0]).with_title("Anime Showcase — 動態效果圖鑑"), ..Default::default() };
+    let opts = eframe::NativeOptions { viewport: egui::ViewportBuilder::default().with_inner_size([1280.0, 820.0]).with_title("Anime Showcase — 動態效果圖鑑"), ..Default::default() };
     eframe::run_native("anime-showcase", opts, Box::new(|cc| {
         let mut f = FontDefinitions::default();
         f.font_data.insert("cjk".into(), FontData::from_static(include_bytes!("../assets/NotoSansCJK-Regular.ttc")));
         for fam in [FontFamily::Proportional, FontFamily::Monospace] { f.families.get_mut(&fam).unwrap().push("cjk".into()); }
         cc.egui_ctx.set_fonts(f);
-        cc.egui_ctx.set_theme(Theme::Dark); // pin dark: set_visuals alone is overridden by a light system theme
-        // `--goto 46` opens directly at section #46
+        cc.egui_ctx.set_theme(Theme::Dark);
+        theme(&cc.egui_ctx);
         let jump = std::env::args().skip_while(|a| a != "--goto").nth(1).and_then(|n| n.parse::<usize>().ok()).filter(|n| (1..=SECTIONS.len()).contains(n)).map(|n| n - 1);
-        Ok(Box::new(App { start: HashMap::new(), snap: false, cur: 0, follow: Pos2::ZERO, vel: 0.0, tops: Vec::new(), jump }))
+        Ok(Box::new(App { start: HashMap::new(), snap: false, cur: 0, cat_y: [0.0; 5], cat_jump: None, follow: Pos2::ZERO, vel: 0.0, tops: Vec::new(), jump }))
     }))
 }
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &Context, _: &mut eframe::Frame) {
         let now = ctx.input(|i| i.time);
-        let mut progress_total = 0.0;
-        TopBottomPanel::top("top").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.heading("Anime Showcase / 動態效果圖鑑");
-                if ui.button("⟲ Replay 重播").clicked() { self.start.clear(); }
-                ui.checkbox(&mut self.snap, "Scroll snap 吸附");
-                ComboBox::from_id_salt("goto").selected_text(format!("跳至 {} {}", SECTIONS[self.cur].0, SECTIONS[self.cur].3)).height(500.0).show_ui(ui, |ui| {
-                    for (j, s) in SECTIONS.iter().enumerate() { if ui.selectable_label(j == self.cur, format!("{} {} / {}", s.0, s.3, s.2)).clicked() { self.jump = Some(j); } }
+        TopBottomPanel::top("top").exact_height(64.0).frame(Frame::none().fill(PANEL).inner_margin(Margin::symmetric(20.0, 0.0))).show(ctx, |ui| {
+            let r = ui.max_rect();
+            grad_rect(ui.painter(), Rect::from_min_max(pos2(r.left() - 20.0, r.bottom() - 2.0), pos2(r.right() + 20.0, r.bottom())), ACCENT, PINK);
+            ui.horizontal_centered(|ui| {
+                let (lr, _) = ui.allocate_exact_size(vec2(36.0, 36.0), Sense::hover());
+                grad_rect(&ui.painter().with_clip_rect(lr), lr, ACCENT, PINK);
+                ui.painter().text(lr.center(), Align2::CENTER_CENTER, "★", FontId::proportional(20.0), Color32::WHITE);
+                ui.vertical(|ui| { ui.add_space(10.0);
+                    ui.label(RichText::new("動畫效果圖鑑  Motion Showcase").size(20.0).strong().color(TEXT));
+                    ui.label(RichText::new("91 種網頁・影片・動畫・電影效果 ｜ アニメーション用語辞典").size(12.0).color(MUTED)); });
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if ui.button(RichText::new("⟲  重播 Replay").color(TEXT)).clicked() { self.start.clear(); }
+                    ui.toggle_value(&mut self.snap, "🧲  吸附 Snap");
+                    ComboBox::from_id_salt("goto").selected_text(format!("跳至 {} {}", SECTIONS[self.cur].0, SECTIONS[self.cur].3)).height(500.0).show_ui(ui, |ui| {
+                        for (j, s) in SECTIONS.iter().enumerate() { if ui.selectable_label(j == self.cur, format!("{} {} / {}", s.0, s.3, s.2)).clicked() { self.jump = Some(j); } }
+                    });
                 });
             });
         });
-        CentralPanel::default().show(ctx, |ui| {
-            let view = ui.max_rect(); let ptr = ctx.input(|i| i.pointer.hover_pos());
-            // smoothed pointer / scroll velocity so hover & velocity effects move with inertia instead of jumping
+        SidePanel::left("nav").exact_width(230.0).resizable(false).frame(Frame::none().fill(PANEL).inner_margin(Margin::symmetric(14.0, 18.0))).show(ctx, |ui| {
+            ui.label(RichText::new("分類 CATEGORIES").size(11.0).color(MUTED)); ui.add_space(6.0);
+            let curcat = CATS.iter().rposition(|c| self.cur >= c.0).unwrap_or(0);
+            for (k, c) in CATS.iter().enumerate() {
+                let n = CATS.get(k + 1).map(|x| x.0).unwrap_or(SECTIONS.len()) - c.0;
+                let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::click());
+                let on = k == curcat;
+                let p = ui.painter();
+                if on { p.rect_filled(r, 10.0, ACCENT.gamma_multiply(0.18)); p.rect_filled(Rect::from_min_size(r.min + vec2(0.0, 10.0), vec2(3.0, 26.0)), 2.0, ACCENT); }
+                else if resp.hovered() { p.rect_filled(r, 10.0, Color32::from_white_alpha(8)); }
+                p.text(r.left_center() + vec2(14.0, 0.0), Align2::LEFT_CENTER, c.1, FontId::proportional(18.0), TEXT);
+                p.text(r.left_center() + vec2(44.0, 0.0), Align2::LEFT_CENTER, c.2, FontId::proportional(15.0), if on { TEXT } else { MUTED });
+                p.text(r.right_center() - vec2(10.0, 0.0), Align2::RIGHT_CENTER, n.to_string(), FontId::proportional(12.0), MUTED);
+                if resp.clicked() { self.cat_jump = Some(k); }
+                ui.add_space(2.0);
+            }
+            ui.add_space(20.0);
+            let s = SECTIONS[self.cur];
+            Frame::none().fill(CARD).rounding(12.0).inner_margin(12.0).show(ui, |ui| {
+                ui.label(RichText::new("📌 目前 NOW（Sticky）").size(11.0).color(MINT));
+                ui.label(RichText::new(format!("{}  {}", s.0, s.3)).size(16.0).strong());
+                ui.label(RichText::new(s.2).size(12.0).color(MUTED));
+                ui.label(RichText::new(s.1).size(12.0).color(MUTED));
+            });
+        });
+        CentralPanel::default().frame(Frame::none().fill(BG)).show(ctx, |ui| {
+            let view = ui.max_rect(); let ptr = ctx.input(|i| i.pointer.hover_pos()); 
             let dt = ctx.input(|i| i.stable_dt).min(0.1);
             if let Some(q) = ptr { self.follow += (q - self.follow) * damp(12.0, dt); }
-            self.vel += (ctx.input(|i| i.smooth_scroll_delta.y) - self.vel) * damp(8.0, dt);
+            let raw_vel = ctx.input(|i| i.smooth_scroll_delta.y);
+            self.vel += (raw_vel - self.vel) * damp(8.0, dt);
             let (follow, vel) = (ptr.map(|_| self.follow), self.vel);
             let mut sa = ScrollArea::vertical().auto_shrink(false);
-            // jump needs section positions from a previous layout pass
-            if let Some(y) = self.jump.and_then(|j| self.tops.get(j)) { sa = sa.vertical_scroll_offset(y - 10.0); self.jump = None; }
-            let tops = &mut self.tops; tops.clear();
+            if let Some(k) = self.cat_jump.take() { sa = sa.vertical_scroll_offset(self.cat_y[k]); }
+            if let Some(y) = self.jump.and_then(|j| self.tops.get(j).copied()) { sa = sa.vertical_scroll_offset(y - 20.0); self.jump = None; }
+            self.tops.clear();
             let out = sa.show(ui, |ui| {
-                let top0 = ui.min_rect().top();
-                let w = ui.available_width();
-                ui.add_space(40.0);
-                ui.label(RichText::new("↓ 往下滾動，每個區塊進入畫面時播放動畫").size(22.0));
-                ui.add_space(view.height() * 0.5);
+                let full = ui.available_width();
+                let w = full.min(960.0);
+                let pad = (full - w) / 2.0;
+                let top0 = ui.cursor().top();
+                ui.add_space(36.0);
+                ui.horizontal(|ui| { ui.add_space(pad); ui.vertical(|ui| {
+                    ui.label(RichText::new("向下捲動，探索 91 種動態效果").size(34.0).strong());
+                    ui.label(RichText::new("每張卡片都標註 繁中／English／日本語，方便你用正確術語向 AI 下指令。").size(15.0).color(MUTED));
+                    ui.label(RichText::new("Scroll down ↓  —  スクロールしてね").size(13.0).color(ACCENT2));
+                }); });
+                ui.add_space(view.height() * 0.35);
                 for (i, s) in SECTIONS.iter().enumerate() {
-                    if let Some(hd) = match i { 0 => Some("🌐 網頁滾動動畫 Web scroll"), 17 => Some("✨ 網頁互動／微動畫 UI micro-interactions"), 45 => Some("🎬 影片剪輯效果 Video editing"), 64 => Some("🌸 動畫／漫畫效果 Anime"), 78 => Some("🎞 電影轉場與鏡頭 Film"), _ => None } { ui.add_space(30.0); ui.label(RichText::new(hd).size(30.0).strong().color(Color32::from_rgb(120, 230, 160))); ui.separator(); }
-                    let h = 300.0;
-                    let (rect, _) = ui.allocate_exact_size(vec2(w, h), Sense::hover());
-                    tops.push(rect.top() - top0);
-                    let p = ui.painter_at(rect);
-                    p.rect_filled(rect.shrink(8.0), 12.0, Color32::from_gray(28));
-                    // scroll progress: 0 when top at viewport bottom, 1 when bottom at viewport top
+                    if let Some(k) = CATS.iter().position(|c| c.0 == i) {
+                        let c = CATS[k];
+                        ui.add_space(if i == 0 { 10.0 } else { 56.0 });
+                        let (hr, _) = ui.allocate_exact_size(vec2(full, 78.0), Sense::hover());
+                        self.cat_y[k] = hr.top() - top0 - 24.0;
+                        let x0 = hr.left() + pad;
+                        let p = ui.painter();
+                        p.text(pos2(x0, hr.top() + 6.0), Align2::LEFT_TOP, format!("{}  {}", c.1, c.2), FontId::proportional(32.0), TEXT);
+                        p.text(pos2(x0 + 2.0, hr.top() + 50.0), Align2::LEFT_TOP, format!("CHAPTER {:02} · {}", k + 1, c.3), FontId::proportional(13.0), MUTED);
+                        grad_rect(p, Rect::from_min_size(pos2(x0, hr.bottom() - 4.0), vec2(180.0, 4.0)), ACCENT, PINK);
+                        p.rect_filled(Rect::from_min_size(pos2(x0 + 180.0, hr.bottom() - 3.0), vec2(w - 180.0, 1.0)), 0.0, Color32::from_rgb(36, 42, 66));
+                        ui.add_space(18.0);
+                    }
+                    let h = 330.0;
+                    let (outer, _) = ui.allocate_exact_size(vec2(full, h), Sense::hover());
+                    let rect = Rect::from_min_size(pos2(outer.left() + pad, outer.top() + 10.0), vec2(w, h - 20.0));
+                    self.tops.push(outer.top() - top0);
                     let sp = ((view.bottom() - rect.top()) / (view.height() + h)).clamp(0.0, 1.0);
                     let visible = rect.top() < view.bottom() - 60.0 && rect.bottom() > view.top();
-                    if rect.top() <= view.top() + 120.0 { self.cur = i; }
-                    // entrance animations replay every time a section re-enters the viewport
-                    if visible { self.start.entry(i).or_insert(now); } else if !rect.intersects(view) { self.start.remove(&i); }
-                    if !rect.intersects(view) { continue; } // off-screen: skip painting entirely
+                    if rect.top() <= view.top() + 160.0 { self.cur = i; }
+                    if visible { self.start.entry(i).or_insert(now); } else if !outer.intersects(view) { self.start.remove(&i); }
+                    if !outer.intersects(view) { continue; }
+                    let p = ui.painter().with_clip_rect(ui.clip_rect());
+                    p.add(epaint::Shadow { offset: vec2(0.0, 10.0), blur: 28.0, spread: 0.0, color: Color32::from_black_alpha(110) }.as_shape(rect, 18.0));
+                    p.rect(rect, 18.0, CARD, Stroke::new(1.0, Color32::from_rgb(38, 45, 72)));
                     let t = self.start.get(&i).map(|s0| (now - s0) as f32).unwrap_or(0.0);
-                    p.text(rect.left_top() + vec2(24.0, 18.0), Align2::LEFT_TOP, format!("{}  {}  /  {}  /  {}", s.0, s.1, s.2, s.3), FontId::proportional(22.0), Color32::from_rgb(255, 200, 90));
-                    let area = Rect::from_min_max(rect.min + vec2(24.0, 60.0), rect.max - vec2(24.0, 20.0));
-                    draw(i, &p, area, t, sp, now as f32, follow, ptr, vel);
+                    // badge
+                    let b = Rect::from_min_size(rect.min + vec2(22.0, 20.0), vec2(46.0, 46.0));
+                    p.rect_filled(b, 12.0, ACCENT.gamma_multiply(0.22));
+                    p.rect_stroke(b, 12.0, Stroke::new(1.0, ACCENT.gamma_multiply(0.6)));
+                    p.text(b.center(), Align2::CENTER_CENTER, s.0, FontId::proportional(18.0), Color32::from_rgb(190, 200, 255));
+                    p.text(pos2(b.right() + 16.0, b.top() - 2.0), Align2::LEFT_TOP, s.3, FontId::proportional(24.0), TEXT);
+                    p.text(pos2(b.right() + 16.0, b.top() + 30.0), Align2::LEFT_TOP, format!("{}   ·   {}", s.2, s.1), FontId::proportional(14.0), MUTED);
+                    let area = Rect::from_min_max(rect.min + vec2(22.0, 84.0), rect.max - vec2(22.0, 20.0));
+                    let stage = p.with_clip_rect(area.intersect(ui.clip_rect()));
+                    stage.rect_filled(area, 12.0, STAGE);
+                    draw(i, &stage, area.shrink(10.0), t, sp, now as f32, follow, ptr, vel);
                 }
-                ui.add_space(view.height());
+                ui.add_space(view.height() * 0.6);
             });
             let off = out.state.offset.y;
             let max = (out.content_size.y - out.inner_rect.height()).max(1.0);
-            progress_total = off / max;
-            // 09: global progress bar at top of viewport
+            let pr = off / max;
             let p = ui.painter();
-            p.rect_filled(Rect::from_min_size(view.min, vec2(view.width() * progress_total, 5.0)), 0.0, Color32::from_rgb(90, 200, 255));
-            // 15 sticky header: shows current section pinned
-            let idx = self.cur;
-            p.text(view.right_top() + vec2(-16.0, 12.0), Align2::RIGHT_TOP, format!("📌 Sticky: {} {}", SECTIONS[idx].0, SECTIONS[idx].3), FontId::proportional(16.0), Color32::LIGHT_GREEN);
-            if self.snap && !ctx.input(|i| i.pointer.any_down()) && ctx.input(|i| i.smooth_scroll_delta.y == 0.0) {
-                let base = view.height() * 0.5 + 70.0;
-                let target = base + ((off - base) / 300.0).round() * 300.0;
+            p.rect_filled(Rect::from_min_size(view.min, vec2(view.width(), 3.0)), 0.0, Color32::from_rgb(28, 33, 54));
+            grad_rect(p, Rect::from_min_size(view.min, vec2(view.width() * pr, 3.0)), ACCENT2, PINK);
+            if self.snap && !ctx.input(|i| i.pointer.any_down()) && raw_vel == 0.0 {
+                let base = view.height() * 0.35 + 46.0;
+                let target = base + ((off - base) / 330.0).round() * 330.0;
                 if (target - off).abs() > 1.0 && off > base - 150.0 {
                     let mut st = out.state; st.offset.y += (target - off) * 0.2; st.store(ctx, out.id);
                 }
@@ -192,28 +296,28 @@ impl eframe::App for App {
 
 #[allow(clippy::too_many_arguments)]
 fn draw(i: usize, p: &Painter, a: Rect, t: f32, sp: f32, now: f32, ptr: Option<Pos2>, raw: Option<Pos2>, vel: f32) {
-    let accent = Color32::from_rgb(90, 200, 255);
+    let accent = ACCENT;
     let c = a.center();
-    let card = |p: &Painter, r: Rect, alpha: f32| p.rect_filled(r, 10.0, accent.gamma_multiply(alpha));
+    let card = |p: &Painter, r: Rect, alpha: f32| { p.add(epaint::Shadow { offset: vec2(0.0, 8.0), blur: 20.0, spread: 0.0, color: Color32::from_black_alpha((90.0 * alpha) as u8) }.as_shape(r, 14.0)); grad_rect(&p.with_clip_rect(r.intersect(p.clip_rect())), r, ACCENT.gamma_multiply(alpha), PINK.gamma_multiply(alpha)); };
     match i {
         0 => { let e = ease(t / 1.2); card(p, Rect::from_center_size(c, vec2(320.0, 140.0)), e); p.text(c, Align2::CENTER_CENTER, "opacity 0 → 1", FontId::proportional(24.0), Color32::BLACK.gamma_multiply(e)); }
         1 => { let e = ease(t / 1.0); card(p, Rect::from_center_size(c + vec2(-300.0 * (1.0 - e), 0.0), vec2(320.0, 140.0)), e); }
         2 => for k in 0..6 { let e = ease((t - k as f32 * 0.15) / 0.7); let x = a.left() + 20.0 + k as f32 * 150.0; card(p, Rect::from_min_size(pos2(x, a.top() + 40.0 + 40.0 * (1.0 - e)), vec2(130.0, 130.0)), e); },
         3 => { let s: Vec<char> = "一個字一個字地出現 Text reveal!".chars().collect(); let n = ((t * 12.0) as usize).min(s.len()); let txt: String = s[..n].iter().collect(); p.text(c, Align2::CENTER_CENTER, txt, FontId::proportional(40.0), Color32::WHITE); }
-        4 => { let e = ease(t / 1.4); let r = Rect::from_center_size(c, vec2(600.0, 160.0)); let clip = Rect::from_min_max(r.min, pos2(r.left() + r.width() * e, r.bottom())); let pp = p.with_clip_rect(clip); pp.rect_filled(r, 10.0, Color32::from_rgb(250, 120, 160)); pp.text(r.center(), Align2::CENTER_CENTER, "clip-path: inset()", FontId::proportional(36.0), Color32::BLACK); }
+        4 => { let e = ease(t / 1.4); let r = Rect::from_center_size(c, vec2(600.0, 160.0)); let clip = Rect::from_min_max(r.min, pos2(r.left() + r.width() * e, r.bottom())); let pp = p.with_clip_rect(clip); pp.rect_filled(r, 10.0, PINK); pp.text(r.center(), Align2::CENTER_CENTER, "clip-path: inset()", FontId::proportional(36.0), Color32::BLACK); }
         5 => { let e = ease(t / 1.5); let blur = (1.0 - e) * 14.0; for k in 0..8 { let o = (k as f32 - 3.5) / 3.5 * blur; p.text(c + vec2(o, 0.0), Align2::CENTER_CENTER, "Blur-in 模糊淡入", FontId::proportional(48.0), Color32::WHITE.gamma_multiply(e / if blur > 0.5 { 4.0 } else { 1.0 })); } }
         6 => { let e = ease(t / 2.0); for (k, (v, u)) in [(12800.0, "users"), (98.0, "%"), (365.0, "days")].iter().enumerate() { p.text(pos2(a.left() + 150.0 + k as f32 * 300.0, c.y), Align2::CENTER_CENTER, format!("{:.0} {}", v * e, u), FontId::proportional(44.0), accent); } }
-        7 => for (k, v) in [0.9, 0.7, 0.55].iter().enumerate() { let e = ease((t - k as f32 * 0.2) / 1.5) * v; let y = a.top() + 30.0 + k as f32 * 55.0; p.rect_filled(Rect::from_min_size(pos2(a.left(), y), vec2(a.width(), 26.0)), 13.0, Color32::from_gray(50)); p.rect_filled(Rect::from_min_size(pos2(a.left(), y), vec2(a.width() * e, 26.0)), 13.0, accent); p.text(pos2(a.right() - 8.0, y + 13.0), Align2::RIGHT_CENTER, format!("{:.0}%", e * 100.0), FontId::proportional(16.0), Color32::WHITE); },
-        8 => { p.rect_filled(Rect::from_min_size(pos2(a.left(), c.y), vec2(a.width(), 12.0)), 6.0, Color32::from_gray(50)); p.rect_filled(Rect::from_min_size(pos2(a.left(), c.y), vec2(a.width() * sp, 12.0)), 6.0, accent); p.text(pos2(a.left(), c.y - 40.0), Align2::LEFT_CENTER, format!("跟著捲動位置變化 progress = {:.2}（頂部藍條為全頁進度）", sp), FontId::proportional(20.0), Color32::WHITE); }
-        9 => { let pp = p.with_clip_rect(a); for (k, &(_r, depth)) in [(0.2f32, 60.0f32), (0.6, 160.0), (1.2, 300.0)].iter().enumerate() { let y = a.bottom() - (sp - 0.5) * depth - 60.0 - k as f32 * 30.0; for j in 0..5 { pp.circle_filled(pos2(a.left() + 80.0 + j as f32 * 200.0 + k as f32 * 60.0, y), 14.0 + k as f32 * 10.0, accent.gamma_multiply(0.3 + 0.3 * k as f32)); } } p.text(a.left_top(), Align2::LEFT_TOP, "遠景慢、近景快", FontId::proportional(18.0), Color32::GRAY); }
+        7 => for (k, v) in [0.9, 0.7, 0.55].iter().enumerate() { let e = ease((t - k as f32 * 0.2) / 1.5) * v; let y = a.top() + 30.0 + k as f32 * 55.0; p.rect_filled(Rect::from_min_size(pos2(a.left(), y), vec2(a.width(), 26.0)), 13.0, Color32::from_rgb(36, 42, 66)); p.rect_filled(Rect::from_min_size(pos2(a.left(), y), vec2(a.width() * e, 26.0)), 13.0, accent); p.text(pos2(a.right() - 8.0, y + 13.0), Align2::RIGHT_CENTER, format!("{:.0}%", e * 100.0), FontId::proportional(16.0), Color32::WHITE); },
+        8 => { p.rect_filled(Rect::from_min_size(pos2(a.left(), c.y), vec2(a.width(), 12.0)), 6.0, Color32::from_rgb(36, 42, 66)); p.rect_filled(Rect::from_min_size(pos2(a.left(), c.y), vec2(a.width() * sp, 12.0)), 6.0, accent); p.text(pos2(a.left(), c.y - 40.0), Align2::LEFT_CENTER, format!("跟著捲動位置變化 progress = {:.2}（頂部藍條為全頁進度）", sp), FontId::proportional(20.0), Color32::WHITE); }
+        9 => { let pp = p.with_clip_rect(a); for (k, &(_r, depth)) in [(0.2f32, 60.0f32), (0.6, 160.0), (1.2, 300.0)].iter().enumerate() { let y = a.bottom() - (sp - 0.5) * depth - 60.0 - k as f32 * 30.0; for j in 0..5 { pp.circle_filled(pos2(a.left() + 80.0 + j as f32 * 200.0 + k as f32 * 60.0, y), 14.0 + k as f32 * 10.0, accent.gamma_multiply(0.3 + 0.3 * k as f32)); } } p.text(a.left_top(), Align2::LEFT_TOP, "遠景慢、近景快", FontId::proportional(18.0), MUTED); }
         10 => { let s = 0.4 + 1.0 * sp; card(p, Rect::from_center_size(c, vec2(260.0 * s, 110.0 * s)).intersect(a), 1.0); p.text(c, Align2::CENTER_CENTER, format!("scale {:.2}", s), FontId::proportional(24.0), Color32::BLACK); }
-        11 => { let f = (sp * 23.99) as usize; let ang = f as f32 / 24.0 * std::f32::consts::TAU; p.circle_stroke(c, 80.0, Stroke::new(3.0, Color32::GRAY)); p.line_segment([c, c + vec2(ang.cos(), ang.sin()) * 80.0], Stroke::new(8.0, accent)); p.text(pos2(c.x + 140.0, c.y), Align2::LEFT_CENTER, format!("frame {:02}/24", f + 1), FontId::proportional(24.0), Color32::WHITE); }
+        11 => { let f = (sp * 23.99) as usize; let ang = f as f32 / 24.0 * std::f32::consts::TAU; p.circle_stroke(c, 80.0, Stroke::new(3.0, MUTED)); p.line_segment([c, c + vec2(ang.cos(), ang.sin()) * 80.0], Stroke::new(8.0, accent)); p.text(pos2(c.x + 140.0, c.y), Align2::LEFT_CENTER, format!("frame {:02}/24", f + 1), FontId::proportional(24.0), Color32::WHITE); }
         12 => { let e = ease(t / 2.5); let n = 200; let pts: Vec<Pos2> = (0..=((n as f32 * e) as usize)).map(|k| { let x = k as f32 / n as f32; pos2(a.left() + 40.0 + x * (a.width() - 80.0), c.y + (x * 12.0).sin() * 60.0 * (1.0 - x * 0.5)) }).collect(); p.add(Shape::line(pts, Stroke::new(4.0, accent))); }
-        13 => { let txt = "Scroll to fill 捲動填色"; let font = FontId::proportional(56.0); let g = p.layout_no_wrap(txt.into(), font.clone(), Color32::from_gray(70)); let r = Align2::CENTER_CENTER.anchor_size(c, g.size()); p.galley(r.min, g, Color32::WHITE); let fill = ((sp - 0.25) * 2.0).clamp(0.0, 1.0); let pp = p.with_clip_rect(Rect::from_min_max(r.min, pos2(r.left() + r.width() * fill, r.bottom()))); pp.text(c, Align2::CENTER_CENTER, txt, font, Color32::WHITE); }
-        14 => { let pp = p.with_clip_rect(a); let y0 = a.top() + 40.0 - sp * 420.0; for k in 0..10 { let r = Rect::from_min_size(pos2(a.left() + 40.0, y0 + k as f32 * 44.0), vec2(a.width() * 0.5, 36.0)); pp.rect_filled(r, 6.0, Color32::from_gray(55)); pp.text(r.left_center() + vec2(12.0, 0.0), Align2::LEFT_CENTER, format!("content row {}", k + 1), FontId::proportional(16.0), Color32::GRAY); } let hd = Rect::from_min_size(pos2(a.left() + 40.0, a.top()), vec2(a.width() * 0.5, 34.0)); pp.rect_filled(hd, 6.0, Color32::from_rgb(60, 140, 90)); pp.text(hd.center(), Align2::CENTER_CENTER, "📌 position: sticky; top: 0", FontId::proportional(18.0), Color32::WHITE); p.text(pos2(a.right() - 20.0, c.y), Align2::RIGHT_CENTER, "內容隨捲動上移，
+        13 => { let txt = "Scroll to fill 捲動填色"; let font = FontId::proportional(56.0); let g = p.layout_no_wrap(txt.into(), font.clone(), Color32::from_rgb(55, 62, 92)); let r = Align2::CENTER_CENTER.anchor_size(c, g.size()); p.galley(r.min, g, Color32::WHITE); let fill = ((sp - 0.25) * 2.0).clamp(0.0, 1.0); let pp = p.with_clip_rect(Rect::from_min_max(r.min, pos2(r.left() + r.width() * fill, r.bottom()))); pp.text(c, Align2::CENTER_CENTER, txt, font, Color32::WHITE); }
+        14 => { let pp = p.with_clip_rect(a); let y0 = a.top() + 40.0 - sp * 420.0; for k in 0..10 { let r = Rect::from_min_size(pos2(a.left() + 40.0, y0 + k as f32 * 44.0), vec2(a.width() * 0.5, 36.0)); pp.rect_filled(r, 6.0, Color32::from_rgb(38, 45, 70)); pp.text(r.left_center() + vec2(12.0, 0.0), Align2::LEFT_CENTER, format!("content row {}", k + 1), FontId::proportional(16.0), MUTED); } let hd = Rect::from_min_size(pos2(a.left() + 40.0, a.top()), vec2(a.width() * 0.5, 34.0)); pp.rect_filled(hd, 6.0, Color32::from_rgb(60, 140, 90)); pp.text(hd.center(), Align2::CENTER_CENTER, "📌 position: sticky; top: 0", FontId::proportional(18.0), Color32::WHITE); p.text(pos2(a.right() - 20.0, c.y), Align2::RIGHT_CENTER, "內容隨捲動上移，
 標題釘在頂端
-（右上角 📌 亦同）", FontId::proportional(20.0), Color32::LIGHT_GREEN); }
-        15 => { let pp = p.with_clip_rect(a); let (cw, gap) = (220.0f32, 20.0); let step = (now / 2.0).floor(); let lt = now % 2.0; let x = if lt < 0.7 { step + 0.65 * ease(lt / 0.7) } else { let u = lt - 0.7; step + 1.0 - 0.35 * (-u * 6.0).exp() * (u * 14.0).cos() }; let frame = Rect::from_center_size(c, vec2(cw + 8.0, 150.0)); for k in 0..5 { let mut d = (k as f32 - x).rem_euclid(5.0); if d > 2.5 { d -= 5.0; } let cx = c.x + d * (cw + gap); pp.rect_filled(Rect::from_center_size(pos2(cx, c.y), vec2(cw, 130.0)), 12.0, hsv(k as f32 * 0.12)); pp.text(pos2(cx, c.y), Align2::CENTER_CENTER, format!("Slide {}", k + 1), FontId::proportional(24.0), Color32::BLACK); } p.rect_stroke(frame, 14.0, Stroke::new(2.0, Color32::WHITE)); p.text(a.left_bottom(), Align2::LEFT_BOTTOM, "scroll-snap-type: x mandatory — 放手後彈回最近的卡片（亦可勾選上方「Scroll snap」）", FontId::proportional(15.0), Color32::GRAY); }
+（右上角 📌 亦同）", FontId::proportional(20.0), MINT); }
+        15 => { let pp = p.with_clip_rect(a); let (cw, gap) = (220.0f32, 20.0); let step = (now / 2.0).floor(); let lt = now % 2.0; let x = if lt < 0.7 { step + 0.65 * ease(lt / 0.7) } else { let u = lt - 0.7; step + 1.0 - 0.35 * (-u * 6.0).exp() * (u * 14.0).cos() }; let frame = Rect::from_center_size(c, vec2(cw + 8.0, 150.0)); for k in 0..5 { let mut d = (k as f32 - x).rem_euclid(5.0); if d > 2.5 { d -= 5.0; } let cx = c.x + d * (cw + gap); pp.rect_filled(Rect::from_center_size(pos2(cx, c.y), vec2(cw, 130.0)), 12.0, hsv(k as f32 * 0.12)); pp.text(pos2(cx, c.y), Align2::CENTER_CENTER, format!("Slide {}", k + 1), FontId::proportional(24.0), Color32::BLACK); } p.rect_stroke(frame, 14.0, Stroke::new(2.0, Color32::WHITE)); p.text(a.left_bottom(), Align2::LEFT_BOTTOM, "scroll-snap-type: x mandatory — 放手後彈回最近的卡片（亦可勾選上方「Scroll snap」）", FontId::proportional(15.0), MUTED); }
         16 => { let pp = p.with_clip_rect(a); let txt = "MARQUEE ✦ 跑馬燈 ✦ INFINITE LOOP ✦ マーキー ✦ "; let g = pp.layout_no_wrap(txt.into(), FontId::proportional(40.0), accent); let w = g.size().x; let off = (now * 120.0) % w; for k in 0..4 { pp.galley(pos2(a.left() - off + k as f32 * w, c.y - 20.0), g.clone(), accent); } }
         45.. => draw3(i - 45, p, a, t, sp, now),
         _ => draw2(i - 17, p, a, t, sp, now, ptr, raw, vel),
@@ -239,12 +343,12 @@ fn sector(p: &Painter, c: Pos2, r: f32, a0: f32, sweep: f32, col: Color32) {
     for j in 0..n { m.add_triangle(0, 1 + j, 2 + j); }
     p.add(m);
 }
-fn hsv(h: f32) -> Color32 { ecolor::Hsva::new(h.rem_euclid(1.0), 0.7, 1.0, 1.0).into() }
+fn hsv(h: f32) -> Color32 { let x = h.rem_euclid(1.0); let hue = 0.55 + 0.42 * (x * std::f32::consts::TAU).sin().abs(); ecolor::Hsva::new(hue.rem_euclid(1.0), 0.48, 0.97, 1.0).into() }
 
 #[allow(clippy::too_many_arguments)]
 fn draw2(k: usize, p: &Painter, a: Rect, t: f32, sp: f32, now: f32, ptr: Option<Pos2>, raw: Option<Pos2>, vel: f32) {
     use std::f32::consts::{PI, TAU};
-    let ac = Color32::from_rgb(90, 200, 255);
+    let ac = ACCENT;
     let c = a.center();
     let f = |s: f32| FontId::proportional(s);
     let pp = p.with_clip_rect(a);
@@ -252,30 +356,30 @@ fn draw2(k: usize, p: &Painter, a: Rect, t: f32, sp: f32, now: f32, ptr: Option<
     let loop_t = t % 3.0;
     match k {
         0 => { let e = ease(t / 0.8); quad(p, c, 160.0 * (0.3 + 0.7 * e), 70.0 * (0.3 + 0.7 * e), 0.0, 1.0, ac.gamma_multiply(e)); }
-        1 => { let e = ease(t / 1.0); quad(p, c, 160.0, 70.0, (1.0 - e) * -PI / 2.0, 1.0, ac.gamma_multiply(e)); quad(p, c + vec2(300.0, 0.0), 80.0, 70.0, 0.0, (e * PI / 2.0).sin().max(0.02), Color32::from_rgb(250, 120, 160)); }
+        1 => { let e = ease(t / 1.0); quad(p, c, 160.0, 70.0, (1.0 - e) * -PI / 2.0, 1.0, ac.gamma_multiply(e)); quad(p, c + vec2(300.0, 0.0), 80.0, 70.0, 0.0, (e * PI / 2.0).sin().max(0.02), PINK); }
         2 => { let x = loop_t / 1.5; let y = if x < 1.0 { let b = 1.0 - x; (b * PI * 3.0).sin().abs() * b * b } else { 0.0 }; p.circle_filled(pos2(c.x, a.bottom() - 30.0 - y * 150.0), 30.0, ac); }
         3 => { let x = loop_t; let s = 1.0 + (-(x * 4.0)).exp() * (x * 18.0).sin() * 0.6; quad(p, c, 90.0 * s, 70.0 * (2.0 - s), 0.0, 1.0, ac); }
-        4 => { let s = "> Hello, typewriter_ 打字機"; let ch: Vec<char> = s.chars().collect(); let n = ((t * 10.0) as usize).min(ch.len()); let mut out: String = ch[..n].iter().collect(); if (now * 2.0) as i32 % 2 == 0 { out.push('▌'); } p.text(pos2(a.left() + 40.0, c.y), Align2::LEFT_CENTER, out, FontId::monospace(36.0), Color32::LIGHT_GREEN); }
+        4 => { let s = "> Hello, typewriter_ 打字機"; let ch: Vec<char> = s.chars().collect(); let n = ((t * 10.0) as usize).min(ch.len()); let mut out: String = ch[..n].iter().collect(); if (now * 2.0) as i32 % 2 == 0 { out.push('▌'); } p.text(pos2(a.left() + 40.0, c.y), Align2::LEFT_CENTER, out, FontId::monospace(36.0), MINT); }
         5 => { let tgt: Vec<char> = "DECODING 解碼完成".chars().collect(); let pool: Vec<char> = "!<>-_\\/[]{}=+*^?#ABXZ01".chars().collect(); let out: String = tgt.iter().enumerate().map(|(j, &ch)| if t * 8.0 > j as f32 + 4.0 { ch } else { pool[((now * 30.0) as usize + j * 7) % pool.len()] }).collect(); p.text(c, Align2::CENTER_CENTER, out, FontId::monospace(44.0), Color32::WHITE); }
         6 => { let txt = "Gradient Shimmer 流光文字"; let g = p.layout_no_wrap(txt.into(), f(52.0), Color32::WHITE); let r = Align2::CENTER_CENTER.anchor_size(c, g.size()); let n = 40; for j in 0..n { let x0 = r.left() + r.width() * j as f32 / n as f32; let cl = Rect::from_min_max(pos2(x0, r.top()), pos2(x0 + r.width() / n as f32 + 1.0, r.bottom())); p.with_clip_rect(cl).galley(r.min, g.clone(), hsv(j as f32 / n as f32 * 0.5 - now * 0.4)); } }
         7 => { let txt: Vec<char> = "WAVE TEXT 波浪文字".chars().collect(); let mut x = a.left() + 120.0; for (j, ch) in txt.iter().enumerate() { let y = (now * 5.0 - j as f32 * 0.5).sin() * 20.0; let g = p.layout_no_wrap(ch.to_string(), f(48.0), Color32::WHITE); let w = g.size().x; p.galley(pos2(x, c.y - 24.0 + y), g, hsv(j as f32 * 0.05)); x += w; } }
         8 => { let r = Rect::from_center_size(c, vec2(320.0, 160.0)); let infl = ptr.map_or(0.0, |q| smoothstep(1.0 - (q - c).length() / 360.0)); let (dx, dy) = ptr.map_or((0.0, 0.0), |q| (((q.x - c.x) / 300.0).clamp(-1.0, 1.0) * infl, ((q.y - c.y) / 100.0).clamp(-1.0, 1.0) * infl)); let lift = 10.0 * infl; p.rect_filled(r.translate(vec2(0.0, 12.0)), 12.0, Color32::from_black_alpha(120)); let pts: Vec<Pos2> = [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom()].iter().map(|q| { let v = *q - c; c + vec2(v.x * (1.0 + dy * v.y.signum() * 0.08), v.y * (1.0 - dx * v.x.signum() * 0.08)) - vec2(0.0, lift) }).collect(); p.add(Shape::convex_polygon(pts, ac, Stroke::NONE)); p.text(c - vec2(0.0, lift), Align2::CENTER_CENTER, "滑鼠移上來試試", f(22.0), Color32::BLACK); }
         9 => { let off = ptr.map_or(Vec2::ZERO, |q| { let d = q - c; d * 0.35 * smoothstep(1.0 - d.length() / 260.0) }); p.rect_filled(Rect::from_center_size(c + off, vec2(200.0, 64.0)), 32.0, ac); p.text(c + off, Align2::CENTER_CENTER, "Magnetic 磁吸", f(22.0), Color32::BLACK); }
-        10 => { p.rect_filled(Rect::from_center_size(c, vec2(360.0, 120.0)), 12.0, Color32::from_gray(60)); for j in 0..3 { let x = (loop_t - j as f32 * 0.5).max(0.0); pp.circle_stroke(c, x * 120.0, Stroke::new(3.0, ac.gamma_multiply((1.0 - x / 2.0).max(0.0)))); } }
-        11 => { let ph = (now * 0.5) % 3.0; let (s0, m) = (ph as usize, ease((ph.fract() - 0.4) / 0.6)); let n = 120; let shape_r = |kind: usize, ang: f32| -> f32 { match kind { 0 => 90.0, 1 => { let u = vec2(ang.cos(), ang.sin()); 80.0 / u.x.abs().max(u.y.abs()) } _ => { let q = (ang + PI / 2.0).rem_euclid(TAU / 5.0) / (TAU / 5.0); 45.0 + 60.0 * (1.0 - 2.0 * (q - 0.5).abs()).powi(2) } } }; let pts: Vec<Pos2> = (0..n).map(|j| { let ang = j as f32 / n as f32 * TAU; let rr = shape_r(s0, ang) * (1.0 - m) + shape_r((s0 + 1) % 3, ang) * m; c + vec2(ang.cos(), ang.sin()) * rr }).collect(); fan(p, c, &pts, hsv((s0 as f32 + m) * 0.15).gamma_multiply(0.85)); p.add(Shape::closed_line(pts, Stroke::new(3.0, Color32::WHITE))); p.text(pos2(a.right() - 20.0, c.y), Align2::RIGHT_CENTER, "● → ■ → ★", f(22.0), Color32::GRAY); }
+        10 => { p.rect_filled(Rect::from_center_size(c, vec2(360.0, 120.0)), 12.0, Color32::from_rgb(40, 47, 74)); for j in 0..3 { let x = (loop_t - j as f32 * 0.5).max(0.0); pp.circle_stroke(c, x * 120.0, Stroke::new(3.0, ac.gamma_multiply((1.0 - x / 2.0).max(0.0)))); } }
+        11 => { let ph = (now * 0.5) % 3.0; let (s0, m) = (ph as usize, ease((ph.fract() - 0.4) / 0.6)); let n = 120; let shape_r = |kind: usize, ang: f32| -> f32 { match kind { 0 => 90.0, 1 => { let u = vec2(ang.cos(), ang.sin()); 80.0 / u.x.abs().max(u.y.abs()) } _ => { let q = (ang + PI / 2.0).rem_euclid(TAU / 5.0) / (TAU / 5.0); 45.0 + 60.0 * (1.0 - 2.0 * (q - 0.5).abs()).powi(2) } } }; let pts: Vec<Pos2> = (0..n).map(|j| { let ang = j as f32 / n as f32 * TAU; let rr = shape_r(s0, ang) * (1.0 - m) + shape_r((s0 + 1) % 3, ang) * m; c + vec2(ang.cos(), ang.sin()) * rr }).collect(); fan(p, c, &pts, hsv((s0 as f32 + m) * 0.15).gamma_multiply(0.85)); p.add(Shape::closed_line(pts, Stroke::new(3.0, Color32::WHITE))); p.text(pos2(a.right() - 20.0, c.y), Align2::RIGHT_CENTER, "● → ■ → ★", f(22.0), MUTED); }
         12 => { let x = -(sp - 0.2).clamp(0.0, 0.6) / 0.6 * 1400.0; for j in 0..8 { let r = Rect::from_min_size(pos2(a.left() + x + j as f32 * 260.0, a.top() + 20.0), vec2(240.0, 170.0)); pp.rect_filled(r, 10.0, hsv(j as f32 * 0.1)); pp.text(r.center(), Align2::CENTER_CENTER, format!("Panel {}", j + 1), f(26.0), Color32::BLACK); } }
-        13 => { let e = ease(t / 1.2); pp.text(c, Align2::CENTER_CENTER, "Curtain 布幕拉開", f(48.0), Color32::WHITE); let hw = a.width() / 2.0 * (1.0 - e); pp.rect_filled(Rect::from_min_size(a.min, vec2(hw, a.height())), 0.0, Color32::from_rgb(160, 30, 50)); pp.rect_filled(Rect::from_min_max(pos2(a.right() - hw, a.top()), a.max), 0.0, Color32::from_rgb(160, 30, 50)); }
-        14 => { for j in 0..3 { let r = Rect::from_min_size(pos2(a.left() + 120.0, a.top() + 20.0 + j as f32 * 50.0), vec2(a.width() - 240.0 - j as f32 * 120.0, 30.0)); p.rect_filled(r, 8.0, Color32::from_gray(55)); let sx = r.left() + ((now * 0.8) % 1.5) * r.width() - 100.0; p.with_clip_rect(r).rect_filled(Rect::from_min_size(pos2(sx, r.top()), vec2(100.0, 30.0)), 0.0, Color32::from_gray(85)); } p.circle_filled(pos2(a.left() + 60.0, a.top() + 45.0), 30.0, Color32::from_gray(55)); }
+        13 => { let e = ease(t / 1.2); pp.text(c, Align2::CENTER_CENTER, "Curtain 布幕拉開", f(48.0), Color32::WHITE); let hw = a.width() / 2.0 * (1.0 - e); pp.rect_filled(Rect::from_min_size(a.min, vec2(hw, a.height())), 0.0, Color32::from_rgb(98, 52, 140)); pp.rect_filled(Rect::from_min_max(pos2(a.right() - hw, a.top()), a.max), 0.0, Color32::from_rgb(98, 52, 140)); }
+        14 => { for j in 0..3 { let r = Rect::from_min_size(pos2(a.left() + 120.0, a.top() + 20.0 + j as f32 * 50.0), vec2(a.width() - 240.0 - j as f32 * 120.0, 30.0)); p.rect_filled(r, 8.0, Color32::from_rgb(38, 45, 70)); let sx = r.left() + ((now * 0.8) % 1.5) * r.width() - 100.0; p.with_clip_rect(r).rect_filled(Rect::from_min_size(pos2(sx, r.top()), vec2(100.0, 30.0)), 0.0, Color32::from_rgb(58, 66, 98)); } p.circle_filled(pos2(a.left() + 60.0, a.top() + 45.0), 30.0, Color32::from_rgb(38, 45, 70)); }
         15 => { let x0 = a.left() + 120.0; let n = 64; let arc: Vec<Pos2> = (0..n).map(|j| { let ang = now * 5.0 + j as f32 / n as f32 * 4.5; pos2(x0, c.y) + vec2(ang.cos(), ang.sin()) * 40.0 }).collect(); p.add(Shape::line(arc, Stroke::new(6.0, ac))); for j in 0..3 { let s = ((now * 5.0 - j as f32).sin() + 1.0) / 2.0; p.circle_filled(pos2(x0 + 200.0 + j as f32 * 40.0, c.y), 8.0 + s * 6.0, ac); } for j in 0..8 { let ang = j as f32 / 8.0 * TAU; let al = ((j as f32 - now * 10.0).rem_euclid(8.0)) / 8.0; p.line_segment([pos2(x0 + 480.0, c.y) + vec2(ang.cos(), ang.sin()) * 20.0, pos2(x0 + 480.0, c.y) + vec2(ang.cos(), ang.sin()) * 40.0], Stroke::new(5.0, Color32::WHITE.gamma_multiply(al))); } }
         16 => { let x = loop_t / 1.5; for j in 0..40 { let ang = j as f32 * 2.4; let sp2 = 80.0 + (j * 37 % 100) as f32 * 1.5; let d = vec2(ang.cos(), ang.sin()) * sp2 * x + vec2(0.0, 120.0 * x * x); pp.circle_filled(c + d, 5.0 * (1.0 - x).max(0.0), hsv(j as f32 * 0.03)); } }
         17 => { let txt = "GLITCH 故障"; let gl = ((now * 7.0).sin() * (now * 13.0).sin()) > 0.6; let o = if gl { 6.0 } else { 0.0 }; p.text(c + vec2(-o, 0.0), Align2::CENTER_CENTER, txt, f(64.0), Color32::from_rgba_unmultiplied(255, 0, 80, 180)); p.text(c + vec2(o, 0.0), Align2::CENTER_CENTER, txt, f(64.0), Color32::from_rgba_unmultiplied(0, 255, 255, 180)); p.text(c, Align2::CENTER_CENTER, txt, f(64.0), Color32::WHITE); if gl { pp.rect_filled(Rect::from_min_size(pos2(a.left(), c.y + ((now * 50.0) % 60.0) - 30.0), vec2(a.width(), 6.0)), 0.0, Color32::from_black_alpha(200)); } }
         18 => { let s = ((now * 4.0).sin() + 1.0) / 2.0; p.circle_filled(c, 40.0 + 30.0 * s, ac.gamma_multiply(0.3 * (1.0 - s))); p.circle_filled(c, 40.0, ac); }
-        19 => { let x = (now % 2.0).min(0.6); let dx = (x * 40.0).sin() * 15.0 * (1.0 - x / 0.6); p.rect_filled(Rect::from_center_size(c + vec2(dx, 0.0), vec2(320.0, 56.0)), 8.0, Color32::from_rgb(200, 60, 60)); p.text(c + vec2(dx, 0.0), Align2::CENTER_CENTER, "密碼錯誤 Wrong password", f(20.0), Color32::WHITE); }
-        20 => { for j in 0..3 { let open = ease((t - 0.6 - j as f32 * 0.6) / 0.4) * if j == 1 { 1.0 } else { 0.0 }; let y = a.top() + j as f32 * 50.0 + if j == 2 { open * 0.0 + ease((t - 1.2) / 0.4) * 60.0 } else { 0.0 }; p.rect_filled(Rect::from_min_size(pos2(a.left() + 100.0, y), vec2(a.width() - 200.0, 42.0)), 6.0, Color32::from_gray(60)); p.text(pos2(a.left() + 120.0, y + 21.0), Align2::LEFT_CENTER, format!("{} 問題 Q{}", if j == 1 && t > 1.2 { "▼" } else { "▶" }, j + 1), f(18.0), Color32::WHITE); if j == 1 { let h = ease((t - 1.2) / 0.4) * 60.0; pp.rect_filled(Rect::from_min_size(pos2(a.left() + 100.0, y + 44.0), vec2(a.width() - 200.0, h)), 6.0, Color32::from_gray(40)); let _ = open; } } }
+        19 => { let x = (now % 2.0).min(0.6); let dx = (x * 40.0).sin() * 15.0 * (1.0 - x / 0.6); p.rect_filled(Rect::from_center_size(c + vec2(dx, 0.0), vec2(320.0, 56.0)), 8.0, Color32::from_rgb(225, 85, 120)); p.text(c + vec2(dx, 0.0), Align2::CENTER_CENTER, "密碼錯誤 Wrong password", f(20.0), Color32::WHITE); }
+        20 => { for j in 0..3 { let open = ease((t - 0.6 - j as f32 * 0.6) / 0.4) * if j == 1 { 1.0 } else { 0.0 }; let y = a.top() + j as f32 * 50.0 + if j == 2 { open * 0.0 + ease((t - 1.2) / 0.4) * 60.0 } else { 0.0 }; p.rect_filled(Rect::from_min_size(pos2(a.left() + 100.0, y), vec2(a.width() - 200.0, 42.0)), 6.0, Color32::from_rgb(40, 47, 74)); p.text(pos2(a.left() + 120.0, y + 21.0), Align2::LEFT_CENTER, format!("{} 問題 Q{}", if j == 1 && t > 1.2 { "▼" } else { "▶" }, j + 1), f(18.0), Color32::WHITE); if j == 1 { let h = ease((t - 1.2) / 0.4) * 60.0; pp.rect_filled(Rect::from_min_size(pos2(a.left() + 100.0, y + 44.0), vec2(a.width() - 200.0, h)), 6.0, Color32::from_rgb(30, 36, 58)); let _ = open; } } }
         21 => { let ang = ease(((t - 0.5) / 1.0).clamp(0.0, 1.0)) * PI; let sx = ang.cos(); let front = sx > 0.0; quad(p, c, 110.0, 80.0, 0.0, sx.abs().max(0.02), if front { ac } else { Color32::from_rgb(250, 180, 80) }); p.text(c, Align2::CENTER_CENTER, if front { "FRONT 正面" } else { "BACK 背面" }, f(20.0), Color32::BLACK); }
-        22 => { let e = ease(t / 2.0) * 0.75; p.circle_stroke(c, 70.0, Stroke::new(12.0, Color32::from_gray(55))); let n = 80; let pts: Vec<Pos2> = (0..=n).map(|j| { let ang = -PI / 2.0 + TAU * e * j as f32 / n as f32; c + vec2(ang.cos(), ang.sin()) * 70.0 }).collect(); p.add(Shape::line(pts, Stroke::new(12.0, ac))); p.text(c, Align2::CENTER_CENTER, format!("{:.0}%", e * 100.0), f(30.0), Color32::WHITE); }
-        23 => { for (row, dir) in [(0.0, 1.0), (1.0, -1.0)] { let txt = if dir > 0.0 { "← LEFT 向左 ✦ " } else { "RIGHT 向右 → ✦ " }; let g = pp.layout_no_wrap(txt.into(), f(36.0), ac); let w = g.size().x; let off = (now * 100.0 * dir).rem_euclid(w); for j in -1..8 { pp.galley(pos2(a.left() - off + j as f32 * w, a.top() + 30.0 + row * 70.0), g.clone(), if dir > 0.0 { ac } else { Color32::from_rgb(250, 120, 160) }); } } }
-        24 => { if let (Some(q), Some(real)) = (hover, raw.filter(|q| a.contains(*q))) { p.line_segment([q, real], Stroke::new(1.0, ac.gamma_multiply(0.3))); p.circle_stroke(q, 24.0, Stroke::new(2.0, ac)); p.circle_filled(real, 5.0, Color32::WHITE); } else { p.text(c, Align2::CENTER_CENTER, "把滑鼠移進來，圓圈會跟著游標", f(22.0), Color32::GRAY); } }
+        22 => { let e = ease(t / 2.0) * 0.75; p.circle_stroke(c, 70.0, Stroke::new(12.0, Color32::from_rgb(38, 45, 70))); let n = 80; let pts: Vec<Pos2> = (0..=n).map(|j| { let ang = -PI / 2.0 + TAU * e * j as f32 / n as f32; c + vec2(ang.cos(), ang.sin()) * 70.0 }).collect(); p.add(Shape::line(pts, Stroke::new(12.0, ac))); p.text(c, Align2::CENTER_CENTER, format!("{:.0}%", e * 100.0), f(30.0), Color32::WHITE); }
+        23 => { for (row, dir) in [(0.0, 1.0), (1.0, -1.0)] { let txt = if dir > 0.0 { "← LEFT 向左 ✦ " } else { "RIGHT 向右 → ✦ " }; let g = pp.layout_no_wrap(txt.into(), f(36.0), ac); let w = g.size().x; let off = (now * 100.0 * dir).rem_euclid(w); for j in -1..8 { pp.galley(pos2(a.left() - off + j as f32 * w, a.top() + 30.0 + row * 70.0), g.clone(), if dir > 0.0 { ac } else { PINK }); } } }
+        24 => { if let (Some(q), Some(real)) = (hover, raw.filter(|q| a.contains(*q))) { p.line_segment([q, real], Stroke::new(1.0, ac.gamma_multiply(0.3))); p.circle_stroke(q, 24.0, Stroke::new(2.0, ac)); p.circle_filled(real, 5.0, Color32::WHITE); } else { p.text(c, Align2::CENTER_CENTER, "把滑鼠移進來，圓圈會跟著游標", f(22.0), MUTED); } }
         25 => { let skew = (vel * 0.02).clamp(-0.5, 0.5); let r = Rect::from_center_size(c, vec2(360.0, 120.0)); let pts = vec![r.left_top() + vec2(skew * 60.0, 0.0), r.right_top() + vec2(skew * 60.0, 0.0), r.right_bottom() - vec2(skew * 60.0, 0.0), r.left_bottom() - vec2(skew * 60.0, 0.0)]; p.add(Shape::convex_polygon(pts, ac, Stroke::NONE)); p.text(c, Align2::CENTER_CENTER, "滾快一點 → 傾斜", f(22.0), Color32::BLACK); }
         26 => { let items = ["Tokyo 東京", "Taipei 台北", "Paris 巴黎"]; for (j, s) in items.iter().enumerate() { let pos = pos2(a.left() + 80.0, a.top() + 30.0 + j as f32 * 55.0); let r = Rect::from_min_size(pos, vec2(300.0, 44.0)); let on = raw.is_some_and(|q| r.contains(q)); p.text(r.left_center(), Align2::LEFT_CENTER, *s, f(30.0), if on { ac } else { Color32::WHITE }); if let (true, Some(q)) = (on, ptr) { p.rect_filled(Rect::from_center_size(q + vec2(200.0, 0.0), vec2(200.0, 130.0)), 8.0, hsv(j as f32 * 0.3)); p.text(q + vec2(200.0, 0.0), Align2::CENTER_CENTER, "🖼 image", f(20.0), Color32::BLACK); } } }
         _ => { for r in 0..3 { for col in 0..10 { let d = (r + col) as f32 * 0.07; let e = ease((t - d) / 0.5); let ctr = pos2(a.left() + 60.0 + col as f32 * 90.0, a.top() + 35.0 + r as f32 * 70.0); p.rect_filled(Rect::from_center_size(ctr, vec2(70.0, 55.0) * e), 6.0, hsv(d * 0.5)); } } }
@@ -288,7 +392,7 @@ fn scene_a(p: &Painter, r: Rect, hue: f32, zoom: f32, pan: f32, al: f32) {
     let pp = p.with_clip_rect(r);
     pp.rect_filled(r, 0.0, hsv(hue).gamma_multiply(0.6 * al));
     let c = r.center() + vec2(pan, 0.0);
-    pp.circle_filled(c + vec2(80.0, -40.0) * zoom, 28.0 * zoom, Color32::from_rgb(255, 230, 120).gamma_multiply(al));
+    pp.circle_filled(c + vec2(80.0, -40.0) * zoom, 28.0 * zoom, Color32::from_rgb(255, 214, 165).gamma_multiply(al));
     for k in 0..3 { let x = c.x + (k as f32 - 1.0) * 140.0 * zoom; let b = r.bottom(); pp.add(Shape::convex_polygon(vec![pos2(x - 120.0 * zoom, b), pos2(x, b - (90.0 + k as f32 * 20.0) * zoom), pos2(x + 120.0 * zoom, b)], hsv(hue + 0.3 + k as f32 * 0.05).gamma_multiply(0.8 * al), Stroke::NONE)); }
 }
 fn rng(n: u32) -> f32 { let mut x = n.wrapping_mul(2654435761) ^ 0x9e3779b9; x ^= x >> 15; x = x.wrapping_mul(2246822519); x ^= x >> 13; (x % 10000) as f32 / 10000.0 }
@@ -305,46 +409,46 @@ fn draw3(k: usize, p: &Painter, a: Rect, t: f32, sp: f32, now: f32) {
     let txt = |s: &str, col: Color32| p.text(r.left_bottom() + vec2(0.0, 6.0), Align2::LEFT_TOP, s, f(14.0), col);
     let _ = sp;
     match k {
-        0 => { pp.rect_filled(r, 0.0, Color32::BLACK); scene(&pp, r, 0.55, 1.0, -cyc * 40.0); scene_a(&pp, r, 0.05, 1.2, 60.0 - cyc * 60.0, tri); txt(&format!("A 場景與 B 場景重疊淡入淡出　B opacity {:.2}", tri), Color32::GRAY); }
+        0 => { pp.rect_filled(r, 0.0, Color32::BLACK); scene(&pp, r, 0.55, 1.0, -cyc * 40.0); scene_a(&pp, r, 0.05, 1.2, 60.0 - cyc * 60.0, tri); txt(&format!("A 場景與 B 場景重疊淡入淡出　B opacity {:.2}", tri), MUTED); }
         1 => { scene(p, r, 0.1, 1.0, 0.0); pp.rect_filled(r, 0.0, Color32::from_black_alpha((tri * 255.0) as u8)); }
         2 => { let x = (cyc * 2.0).fract(); let off = if x < 0.5 { 0.0 } else { ease((x - 0.5) / 0.3) }; let shift = off * r.width(); scene(&pp, r.translate(vec2(-shift, 0.0)), 0.6, 1.0, 0.0); scene(&pp, r.translate(vec2(r.width() - shift, 0.0)), 0.05, 1.0, 0.0); if off > 0.05 && off < 0.95 { for j in 0..20 { let y = r.top() + j as f32 * 10.0; pp.line_segment([pos2(r.left(), y), pos2(r.right(), y)], Stroke::new(6.0, Color32::from_white_alpha(40))); } } }
         3 => { let z = 1.0 + (cyc * 3.0).powi(3); if cyc < 0.6 { scene(&pp, r, 0.6, z, 0.0); } else { scene(&pp, r, 0.0, 1.0 + (1.0 - (cyc - 0.6) / 0.4) * 2.0, 0.0); } }
-        4 => { scene(&pp, r, 0.12, 1.0 + cyc * 0.6, -cyc * 80.0); txt("靜態照片緩慢推近＋平移", Color32::GRAY); }
-        5 => { let speed = if (0.35..0.75).contains(&cyc) { 0.15 } else { 1.0 }; let dist = |u: f32| u.min(0.35) + (u.clamp(0.35, 0.75) - 0.35) * 0.15 + (u - 0.75).max(0.0); let pos = dist(cyc) / dist(1.0); for g in 1..6 { let gx = r.left() + (pos - g as f32 * 0.02 * speed).clamp(0.0, 1.0) * r.width(); pp.circle_filled(pos2(gx, c.y), 20.0, Color32::from_rgb(90, 200, 255).gamma_multiply(0.12)); } pp.rect_filled(r, 0.0, Color32::from_gray(30)); pp.circle_filled(pos2(r.left() + pos * r.width(), c.y), 20.0, Color32::from_rgb(90, 200, 255)); p.text(r.center_top() + vec2(0.0, 8.0), Align2::CENTER_TOP, format!("speed ×{:.2}", speed), f(18.0), Color32::WHITE); }
-        6 => { let fz = (0.4..0.75).contains(&cyc); let x = if fz { 0.4 } else { cyc }; scene(&pp, r, 0.5, 1.0, (x - 0.5) * 200.0); if fz { pp.rect_filled(r, 0.0, Color32::from_white_alpha(30)); pp.text(r.left_top() + vec2(12.0, 10.0), Align2::LEFT_TOP, "FREEZE — 主角介紹", f(24.0), Color32::YELLOW); } }
+        4 => { scene(&pp, r, 0.12, 1.0 + cyc * 0.6, -cyc * 80.0); txt("靜態照片緩慢推近＋平移", MUTED); }
+        5 => { let speed = if (0.35..0.75).contains(&cyc) { 0.15 } else { 1.0 }; let dist = |u: f32| u.min(0.35) + (u.clamp(0.35, 0.75) - 0.35) * 0.15 + (u - 0.75).max(0.0); let pos = dist(cyc) / dist(1.0); for g in 1..6 { let gx = r.left() + (pos - g as f32 * 0.02 * speed).clamp(0.0, 1.0) * r.width(); pp.circle_filled(pos2(gx, c.y), 20.0, ACCENT2.gamma_multiply(0.12)); } pp.rect_filled(r, 0.0, STAGE); pp.circle_filled(pos2(r.left() + pos * r.width(), c.y), 20.0, ACCENT2); p.text(r.center_top() + vec2(0.0, 8.0), Align2::CENTER_TOP, format!("speed ×{:.2}", speed), f(18.0), Color32::WHITE); }
+        6 => { let fz = (0.4..0.75).contains(&cyc); let x = if fz { 0.4 } else { cyc }; scene(&pp, r, 0.5, 1.0, (x - 0.5) * 200.0); if fz { pp.rect_filled(r, 0.0, Color32::from_white_alpha(30)); pp.text(r.left_top() + vec2(12.0, 10.0), Align2::LEFT_TOP, "FREEZE — 主角介紹", f(24.0), AMBER); } }
         7 => { let e = ease(t / 0.9); let m = r.center().x; let sl = (1.0 - e) * r.width() * 0.5; pp.rect_filled(r, 0.0, Color32::BLACK); scene(&pp.with_clip_rect(Rect::from_min_max(r.min, pos2(m - 2.0, r.bottom()))), r.translate(vec2(-sl, 0.0)), 0.6, 1.0, -100.0 + (now * 0.8).sin() * 30.0); scene(&pp.with_clip_rect(Rect::from_min_max(pos2(m + 2.0, r.top()), r.max)), r.translate(vec2(sl, 0.0)), 0.0, 1.0, 100.0 - (now * 0.8).sin() * 30.0); }
         8 => { scene(p, r, 0.55, 1.0, 0.0); let s = Rect::from_min_size(r.right_bottom() - vec2(150.0, 90.0) - vec2(10.0, 10.0), vec2(150.0, 90.0)); p.rect_filled(s.expand(3.0), 4.0, Color32::WHITE); scene(p, s, 0.95, 0.4, (now * 2.0).sin() * 20.0); }
         9 => { scene(p, r, 0.6, 1.0, 0.0); let x = r.left() + tri * r.width(); for j in 0..12 { pp.circle_filled(pos2(x, r.top() + 30.0), 160.0 - j as f32 * 12.0, Color32::from_rgba_unmultiplied(255, 140, 40, 10)); } }
         10 => { scene(p, r, 0.1, 1.0, 0.0); let s = (now * 24.0) as u32; for j in 0..900 { let x = rng(s * 1000 + j); let y = rng(s * 7777 + j * 3); pp.rect_filled(Rect::from_min_size(pos2(r.left() + x * r.width(), r.top() + y * r.height()), vec2(2.0, 2.0)), 0.0, if j % 2 == 0 { Color32::from_white_alpha(60) } else { Color32::from_black_alpha(80) }); } }
         11 => { scene(p, r, 0.1, 1.0, 0.0); let str = 0.4 + tri * 0.6; for j in 0..30 { let rr = r.width() * 0.25 + j as f32 * 8.0; pp.circle_stroke(c, rr, Stroke::new(9.0, Color32::from_black_alpha((j as f32 * 7.0 * str).min(255.0) as u8))); } }
-        12 => { let o = 2.0 + tri * 6.0; for (d, col) in [(-o, Color32::from_rgba_unmultiplied(255, 0, 0, 160)), (o, Color32::from_rgba_unmultiplied(0, 120, 255, 160))] { p.text(c + vec2(d, 0.0), Align2::CENTER_CENTER, "CHROMA 色差", f(56.0), col); } p.text(c, Align2::CENTER_CENTER, "CHROMA 色差", f(56.0), Color32::from_rgba_unmultiplied(255, 255, 255, 200)); txt("越靠近邊緣偏移越大", Color32::GRAY); }
+        12 => { let o = 2.0 + tri * 6.0; for (d, col) in [(-o, Color32::from_rgba_unmultiplied(255, 0, 0, 160)), (o, Color32::from_rgba_unmultiplied(0, 120, 255, 160))] { p.text(c + vec2(d, 0.0), Align2::CENTER_CENTER, "CHROMA 色差", f(56.0), col); } p.text(c, Align2::CENTER_CENTER, "CHROMA 色差", f(56.0), Color32::from_rgba_unmultiplied(255, 255, 255, 200)); txt("越靠近邊緣偏移越大", MUTED); }
         13 => { let o = ((now * 9.0).sin() * 10.0).round(); scene(&p.with_clip_rect(r), r.translate(vec2(-o, 0.0)), 0.0, 1.0, 0.0); pp.rect_filled(r, 0.0, Color32::from_rgba_unmultiplied(0, 255, 255, 40)); scene(&p.with_clip_rect(Rect::from_min_max(r.min, pos2(r.right(), r.top() + 60.0))), r.translate(vec2(o, 0.0)), 0.5, 1.0, 0.0); }
-        14 => { scene(p, r, 0.08, 1.0, 0.0); let bh = r.height() * 0.15 * ease(t / 1.0); pp.rect_filled(Rect::from_min_size(r.min, vec2(r.width(), bh)), 0.0, Color32::BLACK); pp.rect_filled(Rect::from_min_max(pos2(r.left(), r.bottom() - bh), r.max), 0.0, Color32::BLACK); txt("2.39:1 電影比例", Color32::GRAY); }
-        15 => { let m = r.left() + tri * r.width(); scene(&p.with_clip_rect(Rect::from_min_max(r.min, pos2(m, r.bottom()))), r, 0.55, 1.0, 0.0); let right = p.with_clip_rect(Rect::from_min_max(pos2(m, r.top()), r.max)); scene(&right, r, 0.55, 1.0, 0.0); right.rect_filled(r, 0.0, Color32::from_rgba_unmultiplied(255, 120, 20, 70)); right.rect_filled(Rect::from_min_size(r.min, vec2(r.width(), r.height() * 0.5)), 0.0, Color32::from_rgba_unmultiplied(0, 160, 160, 40)); p.line_segment([pos2(m, r.top()), pos2(m, r.bottom())], Stroke::new(2.0, Color32::WHITE)); txt("左：原始　右：Teal & Orange LUT", Color32::GRAY); }
-        16 => { scene(p, r, 0.6, 1.0, 0.0); let e = ease(t / 0.8); let bar = Rect::from_min_size(pos2(r.left() + 16.0 - (1.0 - e) * 300.0, r.bottom() - 60.0), vec2(250.0, 42.0)); p.with_clip_rect(r).rect_filled(bar, 0.0, Color32::from_rgb(200, 40, 60)); p.with_clip_rect(r).text(bar.left_center() + vec2(10.0, 0.0), Align2::LEFT_CENTER, "柯盛達　導演 / Director", f(18.0), Color32::WHITE); }
+        14 => { scene(p, r, 0.08, 1.0, 0.0); let bh = r.height() * 0.15 * ease(t / 1.0); pp.rect_filled(Rect::from_min_size(r.min, vec2(r.width(), bh)), 0.0, Color32::BLACK); pp.rect_filled(Rect::from_min_max(pos2(r.left(), r.bottom() - bh), r.max), 0.0, Color32::BLACK); txt("2.39:1 電影比例", MUTED); }
+        15 => { let m = r.left() + tri * r.width(); scene(&p.with_clip_rect(Rect::from_min_max(r.min, pos2(m, r.bottom()))), r, 0.55, 1.0, 0.0); let right = p.with_clip_rect(Rect::from_min_max(pos2(m, r.top()), r.max)); scene(&right, r, 0.55, 1.0, 0.0); right.rect_filled(r, 0.0, Color32::from_rgba_unmultiplied(255, 120, 20, 70)); right.rect_filled(Rect::from_min_size(r.min, vec2(r.width(), r.height() * 0.5)), 0.0, Color32::from_rgba_unmultiplied(0, 160, 160, 40)); p.line_segment([pos2(m, r.top()), pos2(m, r.bottom())], Stroke::new(2.0, Color32::WHITE)); txt("左：原始　右：Teal & Orange LUT", MUTED); }
+        16 => { scene(p, r, 0.6, 1.0, 0.0); let e = ease(t / 0.8); let bar = Rect::from_min_size(pos2(r.left() + 16.0 - (1.0 - e) * 300.0, r.bottom() - 60.0), vec2(250.0, 42.0)); p.with_clip_rect(r).rect_filled(bar, 0.0, ACCENT); p.with_clip_rect(r).text(bar.left_center() + vec2(10.0, 0.0), Align2::LEFT_CENTER, "柯盛達　導演 / Director", f(18.0), Color32::WHITE); }
         17 => { let words = ["MOVE", "動き", "BIG", "動態!"]; let j = ((now * 1.5) as usize) % 4; let lt = (now * 1.5).fract(); let s = 1.0 + (1.0 - ease(lt / 0.3)) * 1.5; let ang = if j.is_multiple_of(2) { -0.1 } else { 0.08 } * (1.0 + (s - 1.0) * 3.0); let g = p.layout_no_wrap(words[j].into(), f(60.0 * s), hsv(j as f32 * 0.2)); let half = g.size() / 2.0; let pos = c - vec2(half.x * ang.cos() - half.y * ang.sin(), half.x * ang.sin() + half.y * ang.cos()); p.add(epaint::TextShape::new(pos, g, Color32::WHITE).with_angle(ang)); }
-        18 => { let x = cyc; if x < 0.5 { pp.rect_filled(r, 0.0, Color32::from_gray(20)); pp.circle_filled(c, 50.0, Color32::from_rgb(240, 200, 120)); p.text(r.left_top() + vec2(8.0, 8.0), Align2::LEFT_TOP, "SHOT A：盤子", f(16.0), Color32::WHITE); } else { pp.rect_filled(r, 0.0, Color32::from_rgb(10, 10, 40)); pp.circle_filled(c, 50.0, Color32::from_rgb(240, 240, 220)); p.text(r.left_top() + vec2(8.0, 8.0), Align2::LEFT_TOP, "SHOT B：月亮（形狀相同）", f(16.0), Color32::WHITE); } }
+        18 => { let x = cyc; if x < 0.5 { pp.rect_filled(r, 0.0, STAGE); pp.circle_filled(c, 50.0, Color32::from_rgb(240, 200, 120)); p.text(r.left_top() + vec2(8.0, 8.0), Align2::LEFT_TOP, "SHOT A：盤子", f(16.0), Color32::WHITE); } else { pp.rect_filled(r, 0.0, Color32::from_rgb(10, 10, 40)); pp.circle_filled(c, 50.0, Color32::from_rgb(240, 240, 220)); p.text(r.left_top() + vec2(8.0, 8.0), Align2::LEFT_TOP, "SHOT B：月亮（形狀相同）", f(16.0), Color32::WHITE); } }
         // ---- anime
-        19 => { pp.rect_filled(r, 0.0, Color32::WHITE); for j in 0..90 { let an = j as f32 / 90.0 * TAU + rng(j + (now * 12.0) as u32) * 0.05; let r0 = 70.0 + rng(j * 3 + (now * 12.0) as u32) * 40.0; pp.add(Shape::convex_polygon(vec![c + vec2(an.cos(), an.sin()) * r0, c + vec2((an + 0.02).cos(), (an + 0.02).sin()) * 400.0, c + vec2((an - 0.02).cos(), (an - 0.02).sin()) * 400.0], Color32::BLACK, Stroke::NONE)); } p.text(c, Align2::CENTER_CENTER, "!!", f(48.0), Color32::RED); }
+        19 => { pp.rect_filled(r, 0.0, Color32::WHITE); for j in 0..90 { let an = j as f32 / 90.0 * TAU + rng(j + (now * 12.0) as u32) * 0.05; let r0 = 70.0 + rng(j * 3 + (now * 12.0) as u32) * 40.0; pp.add(Shape::convex_polygon(vec![c + vec2(an.cos(), an.sin()) * r0, c + vec2((an + 0.02).cos(), (an + 0.02).sin()) * 400.0, c + vec2((an - 0.02).cos(), (an - 0.02).sin()) * 400.0], Color32::BLACK, Stroke::NONE)); } p.text(c, Align2::CENTER_CENTER, "!!", f(48.0), PINK); }
         20 => { let on = (now * 1.2).fract() < 0.15; if on { pp.rect_filled(r, 0.0, Color32::BLACK); pp.circle_filled(c, 70.0, Color32::WHITE); for j in 0..16 { let an = j as f32 / 16.0 * TAU; pp.line_segment([c, c + vec2(an.cos(), an.sin()) * 300.0], Stroke::new(4.0, Color32::WHITE)); } pp.circle_filled(c, 40.0, Color32::BLACK); } else { pp.rect_filled(r, 0.0, Color32::from_rgb(60, 70, 120)); pp.circle_filled(c, 30.0, Color32::from_rgb(255, 210, 170)); } }
-        21 => { let x = r.left() + 40.0 + tri * (r.width() - 80.0); let v = ((cyc * TAU).cos()).abs(); pp.rect_filled(r, 0.0, Color32::from_gray(40)); for j in 0..8 { pp.circle_filled(pos2(x - j as f32 * 14.0 * v * (cyc * TAU).cos().signum(), c.y), 26.0 - j as f32 * 2.0, Color32::from_rgba_unmultiplied(255, 200, 120, (220 - j * 25) as u8)); } txt("快速動作時把角色拉長、殘影化", Color32::GRAY); }
+        21 => { let x = r.left() + 40.0 + tri * (r.width() - 80.0); let v = ((cyc * TAU).cos()).abs(); pp.rect_filled(r, 0.0, Color32::from_rgb(30, 36, 58)); for j in 0..8 { pp.circle_filled(pos2(x - j as f32 * 14.0 * v * (cyc * TAU).cos().signum(), c.y), 26.0 - j as f32 * 2.0, Color32::from_rgba_unmultiplied(255, 200, 120, (220 - j * 25) as u8)); } txt("快速動作時把角色拉長、殘影化", MUTED); }
         22 => { let sh = if (now * 0.8).fract() < 0.3 { vec2(rng((now * 60.0) as u32) - 0.5, rng((now * 60.0) as u32 + 9) - 0.5) * 24.0 } else { Vec2::ZERO }; scene(&pp, r.translate(sh), 0.75, 1.0, 0.0); p.text(c + sh, Align2::CENTER_CENTER, "ドン！", f(48.0), Color32::WHITE); }
         23 => { pp.rect_filled(r, 0.0, Color32::from_rgb(120, 170, 230)); for j in 0..30 { let x = r.left() + (rng(j) * r.width() + now * 30.0 + (now + j as f32).sin() * 20.0).rem_euclid(r.width()); let y = r.top() + (rng(j + 100) * r.height() + now * (30.0 + rng(j + 5) * 40.0)).rem_euclid(r.height()); quad(&pp, pos2(x, y), 6.0, 4.0, now * 2.0 + j as f32, 1.0, Color32::from_rgb(255, 183, 197)); } }
         24 => { let x = (now * 0.7).fract(); let s = if x < 0.2 { ease(x / 0.2) * 1.2 } else if x < 0.3 { 1.2 - (x - 0.2) * 2.0 } else { 1.0 }; pp.rect_filled(r, 0.0, Color32::from_rgb(255, 220, 230)); pp.circle_filled(c, 60.0 * s, Color32::from_rgb(255, 210, 170)); pp.circle_filled(c + vec2(-20.0, -5.0) * s, 6.0 * s, Color32::BLACK); pp.circle_filled(c + vec2(20.0, -5.0) * s, 6.0 * s, Color32::BLACK); pp.text(c + vec2(90.0, -50.0), Align2::CENTER_CENTER, "ポン♪", f(24.0), Color32::from_rgb(230, 80, 120)); }
         25 => { pp.rect_filled(r, 0.0, Color32::from_gray(230)); pp.circle_filled(c, 60.0, Color32::from_rgb(255, 210, 170)); let y = (now * 0.8).fract() * 30.0; let dp = c + vec2(55.0, -55.0 + y); pp.add(Shape::convex_polygon(vec![dp + vec2(0.0, -22.0), dp + vec2(10.0, 0.0), dp + vec2(0.0, 10.0), dp + vec2(-10.0, 0.0)], Color32::from_rgb(120, 190, 255), Stroke::new(2.0, Color32::from_rgb(40, 90, 200)))); }
-        26 => { pp.rect_filled(r, 0.0, Color32::from_gray(230)); pp.circle_filled(c, 60.0, Color32::from_rgb(255, 210, 170)); let s = 1.0 + ((now * 8.0).sin() * 0.15); let m = c + vec2(50.0, -50.0); for q in 0..4 { let an = q as f32 * PI / 2.0 + PI / 4.0; let d = vec2(an.cos(), an.sin()); let o = m + d * 10.0 * s; let n = vec2(-d.y, d.x); pp.add(Shape::line(vec![o + n * 8.0 * s, o + d * 6.0 * s, o - n * 8.0 * s], Stroke::new(4.0, Color32::RED))); } }
+        26 => { pp.rect_filled(r, 0.0, Color32::from_gray(230)); pp.circle_filled(c, 60.0, Color32::from_rgb(255, 210, 170)); let s = 1.0 + ((now * 8.0).sin() * 0.15); let m = c + vec2(50.0, -50.0); for q in 0..4 { let an = q as f32 * PI / 2.0 + PI / 4.0; let d = vec2(an.cos(), an.sin()); let o = m + d * 10.0 * s; let n = vec2(-d.y, d.x); pp.add(Shape::line(vec![o + n * 8.0 * s, o + d * 6.0 * s, o - n * 8.0 * s], Stroke::new(4.0, PINK))); } }
         27 => { pp.rect_filled(r, 0.0, Color32::from_rgb(30, 20, 60)); for j in 0..6 { let ph = (now * 1.5 + j as f32 * 0.37).fract(); let s = (ph * PI).sin(); let pos = pos2(r.left() + rng(j * 11 + (now * 1.5 + j as f32 * 0.37) as u32) * r.width(), r.top() + rng(j * 7 + (now * 1.5 + j as f32 * 0.37) as u32) * r.height()); pp.add(Shape::convex_polygon(star(pos, 18.0 * s, 4), Color32::from_rgb(255, 250, 200), Stroke::NONE)); } }
         28 => { scene(p, r, 0.7, 1.0, 0.0); let x = (now * 0.6).fract(); let a2 = if x < 0.1 { x / 0.1 } else if x < 0.4 { 1.0 - (x - 0.1) / 0.3 } else { 0.0 }; pp.rect_filled(r, 0.0, Color32::from_white_alpha((a2 * 255.0) as u8)); }
         29 => { let w = a.width(); let pr = [Rect::from_min_size(a.min, vec2(w * 0.55, a.height() * 0.55)), Rect::from_min_max(pos2(a.left() + w * 0.57, a.top()), pos2(a.right(), a.top() + a.height() * 0.55)), Rect::from_min_max(pos2(a.left(), a.top() + a.height() * 0.58), a.max)]; for (j, q) in pr.iter().enumerate() { let e = ease(t / 0.5 - j as f32 * 0.6); if e <= 0.0 { continue; } p.rect_filled(q.shrink(2.0), 0.0, Color32::WHITE.gamma_multiply(e)); p.rect_stroke(q.shrink(2.0), 0.0, Stroke::new(3.0, Color32::BLACK)); p.text(q.center(), Align2::CENTER_CENTER, ["コマ1", "コマ2", "コマ3 ドーン"][j], f(22.0), Color32::BLACK.gamma_multiply(e)); } }
-        30 => { let ang = 0.25 * tri - 0.05; let o = p.with_clip_rect(r); o.rect_filled(r, 0.0, Color32::from_rgb(60, 60, 80)); for j in 0..4 { quad(&o, c + vec2((j as f32 - 1.5) * 90.0, 30.0), 25.0, 70.0, ang, 1.0, Color32::from_gray(140)); } quad(&o, c + vec2(0.0, 100.0), 300.0, 20.0, ang, 1.0, Color32::from_gray(30)); txt("鏡頭傾斜→不安、緊張感", Color32::GRAY); }
+        30 => { let ang = 0.25 * tri - 0.05; let o = p.with_clip_rect(r); o.rect_filled(r, 0.0, Color32::from_rgb(60, 60, 80)); for j in 0..4 { quad(&o, c + vec2((j as f32 - 1.5) * 90.0, 30.0), 25.0, 70.0, ang, 1.0, Color32::from_gray(140)); } quad(&o, c + vec2(0.0, 100.0), 300.0, 20.0, ang, 1.0, STAGE); txt("鏡頭傾斜→不安、緊張感", MUTED); }
         31 => { let o = (now * 120.0) % 200.0; pp.rect_filled(r, 0.0, Color32::from_rgb(150, 200, 255)); for j in -1..4 { let x = r.left() - o + j as f32 * 200.0; pp.rect_filled(Rect::from_min_size(pos2(x, r.bottom() - 80.0), vec2(60.0, 80.0)), 0.0, Color32::from_rgb(90, 140, 90)); pp.rect_filled(Rect::from_min_size(pos2(x + 100.0, r.bottom() - 120.0), vec2(50.0, 120.0)), 0.0, Color32::from_rgb(160, 120, 90)); } pp.circle_filled(pos2(c.x, r.bottom() - 30.0 - ((now * 10.0).sin().abs() * 8.0)), 22.0, Color32::from_rgb(255, 120, 120)); }
         32 => { let x = ease(t / 0.8); pp.rect_filled(r, 0.0, Color32::from_rgb(255, 240, 100)); let s = Rect::from_center_size(c, vec2(r.width(), 60.0 * x)); pp.rect_filled(s, 0.0, Color32::from_rgb(230, 60, 100)); p.text(c, Align2::CENTER_CENTER, "★ アイキャッチ ★  CM の後で", f(24.0 * x.max(0.1)), Color32::WHITE); }
         // ---- film
         33 => { scene(p, r, 0.1, 1.0, 0.0); let rr = (1.0 - tri) * 260.0; pp.circle_stroke(c, rr + 250.0, Stroke::new(500.0, Color32::BLACK)); }
-        34 => { scene(p, r, 0.6, 1.0, 0.0); let s = tri * 300.0 + 1.0; fan(&pp, c, &star(c, s, 5), hsv(0.1).gamma_multiply(0.95)); txt("星形中露出下一個場景", Color32::GRAY); }
+        34 => { scene(p, r, 0.6, 1.0, 0.0); let s = tri * 300.0 + 1.0; fan(&pp, c, &star(c, s, 5), hsv(0.1).gamma_multiply(0.95)); txt("星形中露出下一個場景", MUTED); }
         35 => { scene(p, r, 0.0, 1.0, 0.0); let e = cyc * TAU; sector(&pp, c, 400.0, -PI / 2.0, e, hsv(0.6).gamma_multiply(0.85)); }
-        36 => { let focus_near = tri; for (j, (x, s, near)) in [(-90.0, 70.0, true), (90.0, 40.0, false)].iter().enumerate() { let blur = if *near { 1.0 - focus_near } else { focus_near } * 10.0; let col = if j == 0 { Color32::from_rgb(255, 160, 90) } else { Color32::from_rgb(90, 200, 255) }; for q in 0..6 { p.circle_filled(c + vec2(*x, 0.0), s + blur * q as f32 * 0.6, col.gamma_multiply(if blur < 1.0 { 1.0 } else { 0.18 })); } } txt("焦點在前景 ↔ 背景之間切換", Color32::GRAY); }
-        37 => { let z = 0.6 + tri * 1.2; pp.rect_filled(r, 0.0, Color32::from_gray(20)); for j in 0..10 { let d = (j as f32 + 1.0) * 22.0 * z; pp.rect_stroke(Rect::from_center_size(c, vec2(d * 2.0, d * 1.2)), 0.0, Stroke::new(2.0, Color32::from_gray(150))); } pp.circle_filled(c, 26.0, Color32::from_rgb(255, 200, 160)); txt("主體大小不變、背景透視拉伸（希區考克）", Color32::GRAY); }
+        36 => { let focus_near = tri; for (j, (x, s, near)) in [(-90.0, 70.0, true), (90.0, 40.0, false)].iter().enumerate() { let blur = if *near { 1.0 - focus_near } else { focus_near } * 10.0; let col = if j == 0 { Color32::from_rgb(255, 160, 90) } else { ACCENT2 }; for q in 0..6 { p.circle_filled(c + vec2(*x, 0.0), s + blur * q as f32 * 0.6, col.gamma_multiply(if blur < 1.0 { 1.0 } else { 0.18 })); } } txt("焦點在前景 ↔ 背景之間切換", MUTED); }
+        37 => { let z = 0.6 + tri * 1.2; pp.rect_filled(r, 0.0, STAGE); for j in 0..10 { let d = (j as f32 + 1.0) * 22.0 * z; pp.rect_stroke(Rect::from_center_size(c, vec2(d * 2.0, d * 1.2)), 0.0, Stroke::new(2.0, Color32::from_gray(150))); } pp.circle_filled(c, 26.0, Color32::from_rgb(255, 200, 160)); txt("主體大小不變、背景透視拉伸（希區考克）", MUTED); }
         38 => { pp.rect_filled(r, 0.0, Color32::from_rgb(10, 10, 25)); for j in 0..25 { let pos = pos2(r.left() + rng(j) * r.width(), r.top() + rng(j + 50) * r.height() + (now * 0.5 + j as f32).sin() * 5.0); pp.circle_filled(pos, 12.0 + rng(j + 9) * 22.0, hsv(rng(j + 3) * 0.2 + 0.05).gamma_multiply(0.35)); } }
         39 => { pp.rect_filled(r, 0.0, Color32::from_rgb(20, 20, 40)); let l = pos2(r.left() + 40.0 + tri * 200.0, r.top() + 40.0); let d = c - l; for j in 0..8 { pp.circle_filled(l, 60.0 - j as f32 * 7.0, Color32::from_rgba_unmultiplied(255, 220, 160, 20)); } for (j, k2) in [0.5, 0.9, 1.3, 1.7].iter().enumerate() { pp.circle_stroke(l + d * *k2 * 2.0, 10.0 + j as f32 * 8.0, Stroke::new(3.0, hsv(j as f32 * 0.2).gamma_multiply(0.5))); } pp.line_segment([l - vec2(200.0, 0.0), l + vec2(200.0, 0.0)], Stroke::new(2.0, Color32::from_rgba_unmultiplied(255, 220, 160, 90))); }
         40 => { scene(p, r, 0.6, 1.0, 0.0); pp.rect_filled(r, 0.0, Color32::from_black_alpha(90)); for j in 0..120 { let x = r.left() + rng(j) * (r.width() + 60.0); let y = r.top() + (rng(j + 500) * r.height() + now * 600.0 * (0.7 + rng(j + 3) * 0.6)).rem_euclid(r.height()); pp.line_segment([pos2(x, y), pos2(x - 4.0, y + 14.0)], Stroke::new(1.0, Color32::from_rgba_unmultiplied(200, 220, 255, 140))); } }
