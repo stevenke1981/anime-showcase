@@ -1,3 +1,4 @@
+use eframe::emath::TSTransform;
 use eframe::egui::{self, *};
 use std::collections::HashMap;
 
@@ -103,26 +104,26 @@ fn spring(t: f32) -> f32 { if t <= 0.0 { 0.0 } else { 1.0 - (-6.0 * t).exp() * (
 fn damp(rate: f32, dt: f32) -> f32 { 1.0 - (-rate * dt).exp() }
 fn smoothstep(x: f32) -> f32 { let x = x.clamp(0.0, 1.0); x * x * (3.0 - 2.0 * x) }
 
-struct App { start: HashMap<usize, f64>, snap: bool, cur: usize, cat_y: [f32; 5], cat_jump: Option<usize>, follow: Pos2, vel: f32, tops: Vec<f32>, jump: Option<usize> }
+struct App { start: HashMap<usize, f64>, cur: usize, follow: Pos2, vel: f32, tops: Vec<f32>, jump: Option<usize>, cat_y: [f32; 5], open: Option<(usize, f64)>, hover_amt: HashMap<usize, f32> }
 
-const BG: Color32 = Color32::from_rgb(11, 14, 24);
-const PANEL: Color32 = Color32::from_rgb(16, 20, 34);
-const CARD: Color32 = Color32::from_rgb(23, 28, 46);
-const STAGE: Color32 = Color32::from_rgb(15, 19, 32);
-const ACCENT: Color32 = Color32::from_rgb(124, 140, 255);
-const ACCENT2: Color32 = Color32::from_rgb(77, 208, 225);
-const PINK: Color32 = Color32::from_rgb(244, 114, 182);
-const MINT: Color32 = Color32::from_rgb(110, 231, 183);
-const AMBER: Color32 = Color32::from_rgb(251, 191, 114);
-const TEXT: Color32 = Color32::from_rgb(232, 236, 248);
-const MUTED: Color32 = Color32::from_rgb(140, 150, 178);
-const CATS: [(usize, &str, &str, &str); 5] = [
-    (0, "🌐", "網頁滾動動畫", "Web scroll · スクロール"),
-    (17, "✨", "互動與微動畫", "UI micro-interactions · マイクロインタラクション"),
-    (45, "🎬", "影片剪輯效果", "Video editing · 映像編集"),
-    (64, "🌸", "動畫／漫畫效果", "Anime · アニメ演出"),
-    (78, "🎞", "電影轉場與鏡頭", "Film · 映画技法"),
+const BG: Color32 = Color32::from_rgb(9, 8, 26);
+const STAGE: Color32 = Color32::from_rgb(14, 14, 36);
+const CARD: Color32 = Color32::from_rgb(24, 24, 52);
+const ACCENT: Color32 = Color32::from_rgb(150, 140, 255);
+const ACCENT2: Color32 = Color32::from_rgb(110, 220, 240);
+const PINK: Color32 = Color32::from_rgb(250, 140, 205);
+const MINT: Color32 = Color32::from_rgb(140, 240, 200);
+const AMBER: Color32 = Color32::from_rgb(255, 205, 150);
+const TEXT: Color32 = Color32::from_rgb(240, 238, 255);
+const MUTED: Color32 = Color32::from_rgb(170, 168, 210);
+const CATS: [(usize, &str, &str, &str, &str); 5] = [
+    (0, "🌐", "網頁滾動動畫", "Web Scroll", "スクロール演出"),
+    (17, "✨", "互動與微動畫", "Micro-interactions", "マイクロインタラクション"),
+    (45, "🎬", "影片剪輯效果", "Video Editing", "映像編集"),
+    (64, "🌸", "動畫／漫畫效果", "Anime", "アニメ演出"),
+    (78, "🎞", "電影轉場與鏡頭", "Cinema", "映画技法"),
 ];
+const VW: f32 = 900.0; // virtual demo width the demo code was designed for
 
 fn grad_rect(p: &Painter, r: Rect, c1: Color32, c2: Color32) {
     let mut m = Mesh::default();
@@ -131,28 +132,46 @@ fn grad_rect(p: &Painter, r: Rect, c1: Color32, c2: Color32) {
     m.add_triangle(0, 1, 2); m.add_triangle(0, 2, 3);
     p.add(Shape::mesh(m));
 }
+/// soft radial glow: opaque-ish center fading to transparent rim
+fn radial(p: &Painter, c: Pos2, r: Vec2, col: Color32) {
+    let mut m = Mesh::default();
+    m.colored_vertex(c, col);
+    let n = 48;
+    for k in 0..=n { let a = k as f32 / n as f32 * std::f32::consts::TAU; m.colored_vertex(c + vec2(a.cos() * r.x, a.sin() * r.y), Color32::TRANSPARENT); }
+    for k in 1..=n as u32 { m.add_triangle(0, k, k + 1); }
+    p.add(Shape::mesh(m));
+}
+fn glow_text(p: &Painter, pos: Pos2, al: Align2, s: &str, size: f32, col: Color32, glow: Color32) {
+    for (k, rr) in [10.0f32, 6.0, 3.0].iter().enumerate() {
+        for j in 0..8 { let a = j as f32 / 8.0 * std::f32::consts::TAU; p.text(pos + vec2(a.cos(), a.sin()) * *rr, al, s, FontId::proportional(size), glow.gamma_multiply(0.035 + k as f32 * 0.03)); }
+    }
+    p.text(pos, al, s, FontId::proportional(size), col);
+}
+fn glass(p: &Painter, r: Rect, round: f32, glow: f32, tint: Color32) {
+    p.add(epaint::Shadow { offset: vec2(0.0, 14.0), blur: 40.0, spread: 0.0, color: Color32::from_black_alpha(120) }.as_shape(r, round));
+    if glow > 0.01 { p.add(epaint::Shadow { offset: Vec2::ZERO, blur: 36.0, spread: 2.0, color: tint.gamma_multiply(0.45 * glow) }.as_shape(r, round)); }
+    p.rect_filled(r, round, Color32::from_rgba_unmultiplied(40, 36, 90, 120));
+    p.line_segment([r.left_top() + vec2(round, 1.0), r.right_top() + vec2(-round, 1.0)], Stroke::new(1.0, Color32::from_white_alpha(50)));
+    p.rect_stroke(r, round, Stroke::new(1.0 + glow, Color32::from_rgba_unmultiplied(200, 190, 255, (40.0 + 120.0 * glow) as u8)));
+}
 
 fn theme(ctx: &Context) {
     let mut v = Visuals::dark();
-    v.panel_fill = BG; v.window_fill = PANEL; v.extreme_bg_color = STAGE; v.faint_bg_color = CARD;
+    v.panel_fill = Color32::TRANSPARENT; v.window_fill = CARD; v.extreme_bg_color = STAGE;
     v.override_text_color = Some(TEXT);
-    v.selection.bg_fill = ACCENT.gamma_multiply(0.5);
-    v.hyperlink_color = ACCENT2;
-    for w in [&mut v.widgets.inactive, &mut v.widgets.hovered, &mut v.widgets.active, &mut v.widgets.noninteractive, &mut v.widgets.open] { w.rounding = Rounding::same(10.0); }
-    v.widgets.inactive.weak_bg_fill = Color32::from_rgb(32, 38, 62); v.widgets.inactive.bg_fill = Color32::from_rgb(32, 38, 62);
-    v.widgets.hovered.weak_bg_fill = Color32::from_rgb(48, 56, 92); v.widgets.hovered.bg_stroke = Stroke::new(1.0, ACCENT);
-    v.widgets.active.weak_bg_fill = ACCENT.gamma_multiply(0.6);
-    v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, Color32::from_rgb(36, 42, 66));
+    for w in [&mut v.widgets.inactive, &mut v.widgets.hovered, &mut v.widgets.active] { w.rounding = Rounding::same(20.0); w.bg_stroke = Stroke::new(1.0, Color32::from_white_alpha(30)); }
+    v.widgets.inactive.weak_bg_fill = Color32::from_white_alpha(14);
+    v.widgets.hovered.weak_bg_fill = Color32::from_rgba_unmultiplied(150, 140, 255, 60);
+    v.widgets.active.weak_bg_fill = Color32::from_rgba_unmultiplied(150, 140, 255, 100);
     ctx.set_visuals(v);
     let mut st = (*ctx.style()).clone();
-    st.spacing.item_spacing = vec2(10.0, 8.0); st.spacing.button_padding = vec2(14.0, 7.0);
-    st.text_styles.insert(TextStyle::Button, FontId::proportional(15.0));
-    st.text_styles.insert(TextStyle::Body, FontId::proportional(15.0));
+    st.spacing.button_padding = vec2(14.0, 6.0);
+    st.spacing.scroll = egui::style::ScrollStyle::floating();
     ctx.set_style(st);
 }
 
 fn main() -> eframe::Result<()> {
-    let opts = eframe::NativeOptions { viewport: egui::ViewportBuilder::default().with_inner_size([1280.0, 820.0]).with_title("Anime Showcase — 動態效果圖鑑"), ..Default::default() };
+    let opts = eframe::NativeOptions { viewport: egui::ViewportBuilder::default().with_inner_size([1280.0, 840.0]).with_title("Anime Showcase — 動態效果圖鑑"), ..Default::default() };
     eframe::run_native("anime-showcase", opts, Box::new(|cc| {
         let mut f = FontDefinitions::default();
         f.font_data.insert("cjk".into(), FontData::from_static(include_bytes!("../assets/NotoSansCJK-Regular.ttc")));
@@ -160,136 +179,254 @@ fn main() -> eframe::Result<()> {
         cc.egui_ctx.set_fonts(f);
         cc.egui_ctx.set_theme(Theme::Dark);
         theme(&cc.egui_ctx);
-        let jump = std::env::args().skip_while(|a| a != "--goto").nth(1).and_then(|n| n.parse::<usize>().ok()).filter(|n| (1..=SECTIONS.len()).contains(n)).map(|n| n - 1);
-        Ok(Box::new(App { start: HashMap::new(), snap: false, cur: 0, cat_y: [0.0; 5], cat_jump: None, follow: Pos2::ZERO, vel: 0.0, tops: Vec::new(), jump }))
+        let args: Vec<String> = std::env::args().collect();
+        let num = |flag: &str| args.iter().skip_while(|a| *a != flag).nth(1).and_then(|n| n.parse::<usize>().ok()).filter(|n| (1..=SECTIONS.len()).contains(n)).map(|n| n - 1);
+        let (jump, open) = (num("--goto"), num("--open").map(|i| (i, 0.0)));
+        Ok(Box::new(App { start: HashMap::new(), cur: 0, follow: Pos2::ZERO, vel: 0.0, tops: Vec::new(), jump, cat_y: [0.0; 5], open, hover_amt: HashMap::new() }))
     }))
+}
+
+fn paint_bg(p: &Painter, r: Rect, now: f32, off: f32) {
+    p.rect_filled(r, 0.0, BG);
+    let blobs = [(0.15, 0.25, ACCENT, 0.9), (0.85, 0.2, PINK, 0.7), (0.5, 0.75, ACCENT2, 0.55), (0.2, 0.85, Color32::from_rgb(120, 80, 220), 0.8), (0.9, 0.7, Color32::from_rgb(90, 140, 255), 0.6)];
+    for (k, (x, y, col, a)) in blobs.iter().enumerate() {
+        let k = k as f32;
+        let c = pos2(r.left() + r.width() * (x + 0.08 * (now * 0.07 + k * 1.7).sin()), r.top() + r.height() * (y + 0.06 * (now * 0.05 + k).cos()) - (off * 0.04 * (1.0 + k * 0.3)).rem_euclid(r.height() * 0.0 + 1.0) * 0.0 - (off * 0.03 * (k + 1.0)) % (r.height() * 0.4));
+        radial(p, c, vec2(r.width() * 0.45, r.height() * 0.5), col.gamma_multiply(0.22 * a));
+    }
+    // aurora ribbons
+    for band in 0..3 {
+        let b = band as f32; let mut m = Mesh::default(); let n = 60;
+        let col = [ACCENT2, PINK, MINT][band].gamma_multiply(0.07);
+        for j in 0..=n { let x = r.left() + r.width() * j as f32 / n as f32; let y = r.top() + r.height() * (0.3 + 0.15 * b) + ((x * 0.006) + now * 0.25 + b * 2.0).sin() * 60.0 - (off * 0.02) % 200.0;
+            m.colored_vertex(pos2(x, y - 90.0), Color32::TRANSPARENT); m.colored_vertex(pos2(x, y), col); m.colored_vertex(pos2(x, y + 50.0), Color32::TRANSPARENT); }
+        for j in 0..n as u32 { let i = j * 3; for (a, bb, c) in [(i, i + 1, i + 3), (i + 1, i + 4, i + 3), (i + 1, i + 2, i + 4), (i + 2, i + 5, i + 4)] { m.add_triangle(a, bb, c); } }
+        p.add(Shape::mesh(m));
+    }
+    // floating sparkles / bokeh with depth parallax
+    for j in 0..140u32 {
+        let depth = 0.2 + rng(j + 3) * 0.8;
+        let x = r.left() + rng(j) * r.width() + (now * 0.3 + j as f32).sin() * 12.0 * depth;
+        let y = r.top() + (rng(j + 77) * r.height() * 1.2 - off * 0.15 * depth - now * 6.0 * depth).rem_euclid(r.height() * 1.2) - r.height() * 0.1;
+        let tw = 0.5 + 0.5 * (now * (1.0 + rng(j + 9) * 2.0) + j as f32).sin();
+        if j % 9 == 0 { radial(p, pos2(x, y), Vec2::splat(18.0 + 30.0 * depth), [PINK, ACCENT2, ACCENT][j as usize % 3].gamma_multiply(0.12 * tw)); }
+        else { p.circle_filled(pos2(x, y), 0.6 + 1.6 * depth, Color32::from_white_alpha((40.0 + 170.0 * tw * depth) as u8)); }
+        if j % 23 == 0 { let s = 5.0 * tw * depth + 1.0; let c = pos2(x, y); let col = Color32::from_white_alpha((200.0 * tw) as u8); p.line_segment([c - vec2(s * 2.0, 0.0), c + vec2(s * 2.0, 0.0)], Stroke::new(1.0, col)); p.line_segment([c - vec2(0.0, s * 2.0), c + vec2(0.0, s * 2.0)], Stroke::new(1.0, col)); }
+    }
+    // vignette
+    radial(p, pos2(r.center().x, r.top() - 40.0), vec2(r.width() * 0.6, 140.0), Color32::from_rgba_unmultiplied(4, 3, 14, 120));
+}
+
+struct Card { i: usize, rect: Rect }
+
+fn layout_cards(x0: f32, w: f32, y: &mut f32, ids: std::ops::Range<usize>, gap: f32) -> Vec<Card> {
+    let mut out = Vec::new();
+    let items: Vec<usize> = ids.collect();
+    let mut k = 0;
+    let patterns: [&[f32]; 4] = [&[2.0, 1.0], &[1.0, 1.0, 1.0], &[1.0, 2.0], &[1.0, 1.0, 1.0]];
+    let mut row = 0;
+    let unit = (w - gap * 2.0) / 3.0;
+    while k < items.len() {
+        let (spans, h): (Vec<f32>, f32) = if k == 0 { (vec![3.0], 440.0) } else { let pt = patterns[row % 4]; row += 1; (pt.to_vec(), if pt.len() == 2 { 380.0 } else { 340.0 }) };
+        let n = spans.len().min(items.len() - k);
+        let spans: Vec<f32> = if n < spans.len() { vec![3.0 / n as f32; n] } else { spans };
+        let mut x = x0;
+        for s in spans.iter() {
+            let cw = unit * s + gap * (s - 1.0);
+            out.push(Card { i: items[k], rect: Rect::from_min_size(pos2(x, *y), vec2(cw, h)) });
+            x += cw + gap; k += 1;
+        }
+        *y += h + gap;
+    }
+    out
+}
+
+impl App {
+    /// paint a demo into its own transformed layer so it scales cleanly to any card size
+    #[allow(clippy::too_many_arguments)]
+    fn demo(&self, ctx: &Context, order: Order, key: (usize, u8), i: usize, stage: Rect, clip: Rect, t: f32, sp: f32, now: f32, ptr: Option<Pos2>, follow: Option<Pos2>, vel: f32) {
+        let s = (stage.width() / VW).clamp(0.5, 1.4);
+        let vs = stage.size() / s;
+        let layer = LayerId::new(order, Id::new(("demo", key)));
+        let tr = TSTransform::new(stage.min.to_vec2(), s);
+        ctx.set_transform_layer(layer, tr);
+        let inv = tr.inverse();
+        let varea = Rect::from_min_size(Pos2::ZERO, vs);
+        let vclip = inv.mul_rect(clip.intersect(stage)).intersect(varea);
+        let p = ctx.layer_painter(layer).with_clip_rect(vclip);
+        p.rect_filled(varea, 18.0 / s, Color32::from_rgba_unmultiplied(10, 10, 30, 200));
+        let map = |q: Option<Pos2>| q.map(|q| inv * q);
+        draw(i, &p, varea.shrink(14.0), t, sp, now, map(follow), map(ptr), vel);
+        // re-round the corners: paint the card glass colour over square demo corners
+        let rr = 18.0 / s; let cc = Color32::from_rgb(24, 22, 58);
+        for (corner, dir) in [(varea.left_top(), vec2(1.0, 1.0)), (varea.right_top(), vec2(-1.0, 1.0)), (varea.right_bottom(), vec2(-1.0, -1.0)), (varea.left_bottom(), vec2(1.0, -1.0))] {
+            let c0 = corner + dir * rr; let mut pts = vec![corner];
+            for j in 0..=8 { let a = std::f32::consts::FRAC_PI_2 * j as f32 / 8.0; let v = vec2(-a.cos() * dir.x, -a.sin() * dir.y) * rr; pts.push(c0 + v); }
+            let _ = cc; p.add(Shape::convex_polygon(pts, Color32::from_rgb(26, 24, 60), Stroke::NONE));
+        }
+        p.rect_stroke(varea, rr, Stroke::new(1.0 / s, Color32::from_white_alpha(25)));
+    }
 }
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &Context, _: &mut eframe::Frame) {
         let now = ctx.input(|i| i.time);
-        TopBottomPanel::top("top").exact_height(64.0).frame(Frame::none().fill(PANEL).inner_margin(Margin::symmetric(20.0, 0.0))).show(ctx, |ui| {
-            let r = ui.max_rect();
-            grad_rect(ui.painter(), Rect::from_min_max(pos2(r.left() - 20.0, r.bottom() - 2.0), pos2(r.right() + 20.0, r.bottom())), ACCENT, PINK);
-            ui.horizontal_centered(|ui| {
-                let (lr, _) = ui.allocate_exact_size(vec2(36.0, 36.0), Sense::hover());
-                grad_rect(&ui.painter().with_clip_rect(lr), lr, ACCENT, PINK);
-                ui.painter().text(lr.center(), Align2::CENTER_CENTER, "★", FontId::proportional(20.0), Color32::WHITE);
-                ui.vertical(|ui| { ui.add_space(10.0);
-                    ui.label(RichText::new("動畫效果圖鑑  Motion Showcase").size(20.0).strong().color(TEXT));
-                    ui.label(RichText::new("91 種網頁・影片・動畫・電影效果 ｜ アニメーション用語辞典").size(12.0).color(MUTED)); });
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.button(RichText::new("⟲  重播 Replay").color(TEXT)).clicked() { self.start.clear(); }
-                    ui.toggle_value(&mut self.snap, "🧲  吸附 Snap");
-                    ComboBox::from_id_salt("goto").selected_text(format!("跳至 {} {}", SECTIONS[self.cur].0, SECTIONS[self.cur].3)).height(500.0).show_ui(ui, |ui| {
-                        for (j, s) in SECTIONS.iter().enumerate() { if ui.selectable_label(j == self.cur, format!("{} {} / {}", s.0, s.3, s.2)).clicked() { self.jump = Some(j); } }
-                    });
+        let nowf = now as f32;
+        let dt = ctx.input(|i| i.stable_dt).min(0.1);
+        let ptr = ctx.input(|i| i.pointer.hover_pos());
+        if let Some(q) = ptr { self.follow += (q - self.follow) * damp(12.0, dt); }
+        let raw_vel = ctx.input(|i| i.smooth_scroll_delta.y);
+        self.vel += (raw_vel - self.vel) * damp(8.0, dt);
+        let (follow, vel) = (ptr.map(|_| self.follow), self.vel);
+        let screen = ctx.screen_rect();
+        let prev_off = ctx.data(|d| d.get_temp::<f32>(Id::new("off"))).unwrap_or(0.0);
+        paint_bg(&ctx.layer_painter(LayerId::background()), screen, nowf, prev_off);
+        if ctx.input(|i| i.key_pressed(Key::Escape)) { self.open = None; }
+        let modal = self.open.is_some();
+
+        let mut clicked: Option<usize> = None;
+        CentralPanel::default().frame(Frame::none()).show(ctx, |ui| {
+            let view = ui.max_rect();
+            let mut sa = ScrollArea::vertical().auto_shrink(false);
+            if let Some(y) = self.jump.and_then(|j| self.tops.get(j).copied()) { sa = sa.vertical_scroll_offset((y - 110.0).max(0.0)); self.jump = None; }
+            if let Some(k) = ctx.data(|d| d.get_temp::<usize>(Id::new("catjump"))) { sa = sa.vertical_scroll_offset(self.cat_y[k]); ctx.data_mut(|d| d.remove::<usize>(Id::new("catjump"))); }
+            if modal { sa = sa.enable_scrolling(false); }
+            let out = sa.show(ui, |ui| {
+                let top0 = ui.min_rect().top();
+                let full = ui.available_width();
+                let w = (full - 96.0).min(1180.0);
+                let x0 = ui.min_rect().left() + (full - w) / 2.0;
+                let p = ui.painter().clone();
+                let off = view.top() - top0;
+                // ---------- HERO ----------
+                let hero_h = view.height();
+                let hc = pos2(view.center().x, top0 + hero_h * 0.46 + off * 0.45);
+                let fade = (1.0 - off / (hero_h * 0.7)).clamp(0.0, 1.0);
+                radial(&p, hc, vec2(520.0, 260.0), ACCENT.gamma_multiply(0.25 * fade));
+                radial(&p, hc + vec2(160.0 * (nowf * 0.4).sin(), 40.0), vec2(300.0, 160.0), PINK.gamma_multiply(0.18 * fade));
+                p.text(hc - vec2(0.0, 118.0), Align2::CENTER_CENTER, "M O T I O N   A T L A S", FontId::proportional(15.0), MUTED.gamma_multiply(fade));
+                glow_text(&p, hc - vec2(0.0, 40.0), Align2::CENTER_CENTER, "夢幻動態圖鑑", 84.0, TEXT.gamma_multiply(fade), PINK.gamma_multiply(fade));
+                p.text(hc + vec2(0.0, 40.0), Align2::CENTER_CENTER, "モーション図鑑  ·  The Dreamy Motion Encyclopedia", FontId::proportional(20.0), Color32::from_rgb(205, 200, 255).gamma_multiply(fade));
+                p.text(hc + vec2(0.0, 78.0), Align2::CENTER_CENTER, "91 種網頁・影片・動畫・電影效果，每一個都附上 中文／English／日本語 名稱", FontId::proportional(15.0), MUTED.gamma_multiply(fade));
+                let pills = ["91 effects", "5 chapters", "3 languages"];
+                for (k, s) in pills.iter().enumerate() { let c = hc + vec2((k as f32 - 1.0) * 150.0, 132.0); let r = Rect::from_center_size(c, vec2(130.0, 36.0)); p.rect_filled(r, 18.0, Color32::from_white_alpha((14.0 * fade) as u8)); p.rect_stroke(r, 18.0, Stroke::new(1.0, Color32::from_white_alpha((50.0 * fade) as u8))); p.text(c, Align2::CENTER_CENTER, *s, FontId::proportional(14.0), TEXT.gamma_multiply(fade)); }
+                let bob = (nowf * 2.0).sin() * 6.0;
+                p.text(pos2(view.center().x, top0 + hero_h - 70.0 + bob), Align2::CENTER_CENTER, "scroll  ↓", FontId::proportional(14.0), MUTED.gamma_multiply(fade));
+                let mut y = top0 + hero_h;
+                self.tops = vec![0.0; SECTIONS.len()];
+                let gap = 26.0;
+                for (k, c) in CATS.iter().enumerate() {
+                    // ---------- chapter divider ----------
+                    let end = CATS.get(k + 1).map(|x| x.0).unwrap_or(SECTIONS.len());
+                    y += 40.0;
+                    let dh = 300.0;
+                    self.cat_y[k] = y - top0 + 20.0;
+                    let dc = pos2(view.center().x, y + dh / 2.0);
+                    let par = (dc.y - view.center().y) * 0.15;
+                    radial(&p, dc + vec2(0.0, par), vec2(w * 0.55, 170.0), [ACCENT, ACCENT2, PINK, Color32::from_rgb(255, 160, 200), AMBER][k].gamma_multiply(0.2));
+                    p.text(dc + vec2(0.0, par * 2.0 - 10.0), Align2::CENTER_CENTER, c.3.to_uppercase(), FontId::proportional(150.0), Color32::from_white_alpha(4));
+                    p.text(dc - vec2(0.0, 86.0), Align2::CENTER_CENTER, format!("CHAPTER  0{}   ·   {} effects", k + 1, end - c.0), FontId::proportional(13.0), MUTED);
+                    glow_text(&p, dc - vec2(0.0, 22.0), Align2::CENTER_CENTER, &format!("{}  {}", c.1, c.2), 54.0, TEXT, [ACCENT, ACCENT2, PINK, PINK, AMBER][k]);
+                    p.text(dc + vec2(0.0, 36.0), Align2::CENTER_CENTER, format!("{}  ·  {}", c.3, c.4), FontId::proportional(18.0), Color32::from_rgb(205, 200, 255));
+                    let lw = 220.0; grad_rect(&p, Rect::from_center_size(dc + vec2(0.0, 72.0), vec2(lw, 2.0)), Color32::TRANSPARENT, PINK); grad_rect(&p, Rect::from_min_size(dc + vec2(0.0, 71.0), vec2(lw / 2.0, 2.0)), PINK, Color32::TRANSPARENT);
+                    grad_rect(&p, Rect::from_min_size(dc + vec2(-lw / 2.0, 71.0), vec2(lw / 2.0, 2.0)), Color32::TRANSPARENT, PINK);
+                    y += dh;
+                    // ---------- bento grid ----------
+                    for card in layout_cards(x0, w, &mut y, c.0..end, gap) {
+                        let i = card.i; let s = SECTIONS[i];
+                        self.tops[i] = card.rect.top() - top0;
+                        let base = card.rect;
+                        let vis = base.intersects(view);
+                        if base.top() <= view.top() + view.height() * 0.4 { self.cur = i; }
+                        if base.top() < view.bottom() - 60.0 && base.bottom() > view.top() { self.start.entry(i).or_insert(now); } else if !vis { self.start.remove(&i); }
+                        if !vis { continue; }
+                        let resp = ui.interact(base, Id::new(("card", i)), Sense::click());
+                        let hov = resp.hovered() && !modal;
+                        if resp.clicked() && !modal { clicked = Some(i); }
+                        let h = self.hover_amt.entry(i).or_insert(0.0); *h += ((if hov { 1.0 } else { 0.0 }) - *h) * damp(10.0, dt); let ha = *h;
+                        let float = (nowf * 0.9 + i as f32 * 0.7).sin() * 3.0 - ha * 8.0;
+                        let tilt = if hov { ptr.map(|q| (q - base.center()) / base.size()).unwrap_or(Vec2::ZERO) } else { Vec2::ZERO };
+                        let rect = base.translate(vec2(tilt.x * 6.0 * ha, float + tilt.y * 4.0 * ha)).expand(ha * 4.0);
+                        let tint = [ACCENT, ACCENT2, PINK, PINK, AMBER][k];
+                        glass(&p, rect, 26.0, 0.25 + ha * 0.75, tint);
+                        let big = base.height() > 400.0;
+                        // header: number pill, title, subtitles
+                        let pill = Rect::from_min_size(rect.min + vec2(22.0, 22.0), vec2(44.0, 26.0));
+                        p.rect_filled(pill, 13.0, tint.gamma_multiply(0.25)); p.rect_stroke(pill, 13.0, Stroke::new(1.0, tint.gamma_multiply(0.7)));
+                        p.text(pill.center(), Align2::CENTER_CENTER, s.0, FontId::proportional(13.0), TEXT);
+                        if big { p.text(pill.right_center() + vec2(12.0, 0.0), Align2::LEFT_CENTER, "FEATURED ★", FontId::proportional(12.0), tint); }
+                        p.text(rect.min + vec2(24.0, 60.0), Align2::LEFT_TOP, s.3, FontId::proportional(if big { 32.0 } else { 22.0 }), TEXT);
+                        p.text(rect.min + vec2(24.0, if big { 102.0 } else { 92.0 }), Align2::LEFT_TOP, format!("{}  ·  {}", s.2, s.1), FontId::proportional(13.0), MUTED);
+                        if ha > 0.05 { p.text(rect.right_top() + vec2(-24.0, 30.0), Align2::RIGHT_CENTER, "點擊放大 ＋", FontId::proportional(13.0), TEXT.gamma_multiply(ha)); }
+                        let stage = Rect::from_min_max(rect.min + vec2(18.0, if big { 132.0 } else { 120.0 }), rect.max - vec2(18.0, 18.0));
+                        let sp = ((view.bottom() - base.top()) / (view.height() + base.height())).clamp(0.0, 1.0);
+                        let t = self.start.get(&i).map(|s0| (now - s0) as f32).unwrap_or(0.0);
+                        self.demo(ctx, Order::Middle, (i, 0), i, stage, view, t, sp, nowf, if modal { None } else { ptr }, if modal { None } else { follow }, vel);
+                    }
+                }
+                y += 120.0;
+                p.text(pos2(view.center().x, y), Align2::CENTER_CENTER, "★  fin  ·  おしまい  ·  完  ★", FontId::proportional(16.0), MUTED);
+                y += 140.0;
+                ui.allocate_space(vec2(full, y - top0));
+            });
+            let off = out.state.offset.y;
+            ctx.data_mut(|d| d.insert_temp(Id::new("off"), off));
+            let max = (out.content_size.y - out.inner_rect.height()).max(1.0);
+            let lp = ctx.layer_painter(LayerId::new(Order::Foreground, Id::new("prog")));
+            grad_rect(&lp, Rect::from_min_size(view.min, vec2(view.width() * off / max, 3.0)), ACCENT2, PINK);
+        });
+
+        // ---------- floating glass nav ----------
+        let curcat = CATS.iter().rposition(|c| self.cur >= c.0).unwrap_or(0);
+        Area::new(Id::new("nav")).order(Order::Foreground).fixed_pos(pos2(screen.center().x, 18.0)).pivot(Align2::CENTER_TOP).show(ctx, |ui| {
+            Frame::none().fill(Color32::from_rgba_unmultiplied(28, 24, 64, 200)).stroke(Stroke::new(1.0, Color32::from_white_alpha(40))).rounding(28.0).inner_margin(Margin::symmetric(16.0, 8.0))
+                .shadow(epaint::Shadow { offset: vec2(0.0, 8.0), blur: 30.0, spread: 0.0, color: Color32::from_black_alpha(140) }).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("★ 夢幻動態圖鑑").size(15.0).strong().color(Color32::from_rgb(220, 210, 255)));
+                    ui.add_space(10.0);
+                    for (k, c) in CATS.iter().enumerate() {
+                        let on = k == curcat;
+                        let b = Button::new(RichText::new(format!("{} {}", c.1, c.3)).size(13.0).color(if on { TEXT } else { MUTED })).fill(if on { Color32::from_rgba_unmultiplied(150, 140, 255, 70) } else { Color32::TRANSPARENT }).stroke(Stroke::NONE).rounding(16.0);
+                        if ui.add(b).clicked() { ctx.data_mut(|d| d.insert_temp(Id::new("catjump"), k)); self.open = None; }
+                    }
+                    ui.add_space(6.0);
+                    if ui.add(Button::new(RichText::new("⟲").size(15.0)).rounding(16.0)).on_hover_text("Replay 重播").clicked() { self.start.clear(); }
                 });
             });
         });
-        SidePanel::left("nav").exact_width(230.0).resizable(false).frame(Frame::none().fill(PANEL).inner_margin(Margin::symmetric(14.0, 18.0))).show(ctx, |ui| {
-            ui.label(RichText::new("分類 CATEGORIES").size(11.0).color(MUTED)); ui.add_space(6.0);
-            let curcat = CATS.iter().rposition(|c| self.cur >= c.0).unwrap_or(0);
-            for (k, c) in CATS.iter().enumerate() {
-                let n = CATS.get(k + 1).map(|x| x.0).unwrap_or(SECTIONS.len()) - c.0;
-                let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::click());
-                let on = k == curcat;
-                let p = ui.painter();
-                if on { p.rect_filled(r, 10.0, ACCENT.gamma_multiply(0.18)); p.rect_filled(Rect::from_min_size(r.min + vec2(0.0, 10.0), vec2(3.0, 26.0)), 2.0, ACCENT); }
-                else if resp.hovered() { p.rect_filled(r, 10.0, Color32::from_white_alpha(8)); }
-                p.text(r.left_center() + vec2(14.0, 0.0), Align2::LEFT_CENTER, c.1, FontId::proportional(18.0), TEXT);
-                p.text(r.left_center() + vec2(44.0, 0.0), Align2::LEFT_CENTER, c.2, FontId::proportional(15.0), if on { TEXT } else { MUTED });
-                p.text(r.right_center() - vec2(10.0, 0.0), Align2::RIGHT_CENTER, n.to_string(), FontId::proportional(12.0), MUTED);
-                if resp.clicked() { self.cat_jump = Some(k); }
-                ui.add_space(2.0);
-            }
-            ui.add_space(20.0);
-            let s = SECTIONS[self.cur];
-            Frame::none().fill(CARD).rounding(12.0).inner_margin(12.0).show(ui, |ui| {
-                ui.label(RichText::new("📌 目前 NOW（Sticky）").size(11.0).color(MINT));
-                ui.label(RichText::new(format!("{}  {}", s.0, s.3)).size(16.0).strong());
-                ui.label(RichText::new(s.2).size(12.0).color(MUTED));
-                ui.label(RichText::new(s.1).size(12.0).color(MUTED));
+        // now-playing chip (sticky)
+        let s = SECTIONS[self.cur];
+        Area::new(Id::new("now")).order(Order::Foreground).fixed_pos(pos2(24.0, screen.bottom() - 24.0)).pivot(Align2::LEFT_BOTTOM).show(ctx, |ui| {
+            Frame::none().fill(Color32::from_rgba_unmultiplied(28, 24, 64, 190)).stroke(Stroke::new(1.0, Color32::from_white_alpha(35))).rounding(20.0).inner_margin(Margin::symmetric(14.0, 8.0)).show(ui, |ui| {
+                ui.label(RichText::new(format!("📌 {}  {}  ·  {}", s.0, s.3, s.2)).size(12.0).color(Color32::from_rgb(215, 210, 255)));
             });
         });
-        CentralPanel::default().frame(Frame::none().fill(BG)).show(ctx, |ui| {
-            let view = ui.max_rect(); let ptr = ctx.input(|i| i.pointer.hover_pos()); 
-            let dt = ctx.input(|i| i.stable_dt).min(0.1);
-            if let Some(q) = ptr { self.follow += (q - self.follow) * damp(12.0, dt); }
-            let raw_vel = ctx.input(|i| i.smooth_scroll_delta.y);
-            self.vel += (raw_vel - self.vel) * damp(8.0, dt);
-            let (follow, vel) = (ptr.map(|_| self.follow), self.vel);
-            let mut sa = ScrollArea::vertical().auto_shrink(false);
-            if let Some(k) = self.cat_jump.take() { sa = sa.vertical_scroll_offset(self.cat_y[k]); }
-            if let Some(y) = self.jump.and_then(|j| self.tops.get(j).copied()) { sa = sa.vertical_scroll_offset(y - 20.0); self.jump = None; }
-            self.tops.clear();
-            let out = sa.show(ui, |ui| {
-                let full = ui.available_width();
-                let w = full.min(960.0);
-                let pad = (full - w) / 2.0;
-                let top0 = ui.cursor().top();
-                ui.add_space(36.0);
-                ui.horizontal(|ui| { ui.add_space(pad); ui.vertical(|ui| {
-                    ui.label(RichText::new("向下捲動，探索 91 種動態效果").size(34.0).strong());
-                    ui.label(RichText::new("每張卡片都標註 繁中／English／日本語，方便你用正確術語向 AI 下指令。").size(15.0).color(MUTED));
-                    ui.label(RichText::new("Scroll down ↓  —  スクロールしてね").size(13.0).color(ACCENT2));
-                }); });
-                ui.add_space(view.height() * 0.35);
-                for (i, s) in SECTIONS.iter().enumerate() {
-                    if let Some(k) = CATS.iter().position(|c| c.0 == i) {
-                        let c = CATS[k];
-                        ui.add_space(if i == 0 { 10.0 } else { 56.0 });
-                        let (hr, _) = ui.allocate_exact_size(vec2(full, 78.0), Sense::hover());
-                        self.cat_y[k] = hr.top() - top0 - 24.0;
-                        let x0 = hr.left() + pad;
-                        let p = ui.painter();
-                        p.text(pos2(x0, hr.top() + 6.0), Align2::LEFT_TOP, format!("{}  {}", c.1, c.2), FontId::proportional(32.0), TEXT);
-                        p.text(pos2(x0 + 2.0, hr.top() + 50.0), Align2::LEFT_TOP, format!("CHAPTER {:02} · {}", k + 1, c.3), FontId::proportional(13.0), MUTED);
-                        grad_rect(p, Rect::from_min_size(pos2(x0, hr.bottom() - 4.0), vec2(180.0, 4.0)), ACCENT, PINK);
-                        p.rect_filled(Rect::from_min_size(pos2(x0 + 180.0, hr.bottom() - 3.0), vec2(w - 180.0, 1.0)), 0.0, Color32::from_rgb(36, 42, 66));
-                        ui.add_space(18.0);
-                    }
-                    let h = 330.0;
-                    let (outer, _) = ui.allocate_exact_size(vec2(full, h), Sense::hover());
-                    let rect = Rect::from_min_size(pos2(outer.left() + pad, outer.top() + 10.0), vec2(w, h - 20.0));
-                    self.tops.push(outer.top() - top0);
-                    let sp = ((view.bottom() - rect.top()) / (view.height() + h)).clamp(0.0, 1.0);
-                    let visible = rect.top() < view.bottom() - 60.0 && rect.bottom() > view.top();
-                    if rect.top() <= view.top() + 160.0 { self.cur = i; }
-                    if visible { self.start.entry(i).or_insert(now); } else if !outer.intersects(view) { self.start.remove(&i); }
-                    if !outer.intersects(view) { continue; }
-                    let p = ui.painter().with_clip_rect(ui.clip_rect());
-                    p.add(epaint::Shadow { offset: vec2(0.0, 10.0), blur: 28.0, spread: 0.0, color: Color32::from_black_alpha(110) }.as_shape(rect, 18.0));
-                    p.rect(rect, 18.0, CARD, Stroke::new(1.0, Color32::from_rgb(38, 45, 72)));
-                    let t = self.start.get(&i).map(|s0| (now - s0) as f32).unwrap_or(0.0);
-                    // badge
-                    let b = Rect::from_min_size(rect.min + vec2(22.0, 20.0), vec2(46.0, 46.0));
-                    p.rect_filled(b, 12.0, ACCENT.gamma_multiply(0.22));
-                    p.rect_stroke(b, 12.0, Stroke::new(1.0, ACCENT.gamma_multiply(0.6)));
-                    p.text(b.center(), Align2::CENTER_CENTER, s.0, FontId::proportional(18.0), Color32::from_rgb(190, 200, 255));
-                    p.text(pos2(b.right() + 16.0, b.top() - 2.0), Align2::LEFT_TOP, s.3, FontId::proportional(24.0), TEXT);
-                    p.text(pos2(b.right() + 16.0, b.top() + 30.0), Align2::LEFT_TOP, format!("{}   ·   {}", s.2, s.1), FontId::proportional(14.0), MUTED);
-                    let area = Rect::from_min_max(rect.min + vec2(22.0, 84.0), rect.max - vec2(22.0, 20.0));
-                    let stage = p.with_clip_rect(area.intersect(ui.clip_rect()));
-                    stage.rect_filled(area, 12.0, STAGE);
-                    draw(i, &stage, area.shrink(10.0), t, sp, now as f32, follow, ptr, vel);
-                }
-                ui.add_space(view.height() * 0.6);
-            });
-            let off = out.state.offset.y;
-            let max = (out.content_size.y - out.inner_rect.height()).max(1.0);
-            let pr = off / max;
-            let p = ui.painter();
-            p.rect_filled(Rect::from_min_size(view.min, vec2(view.width(), 3.0)), 0.0, Color32::from_rgb(28, 33, 54));
-            grad_rect(p, Rect::from_min_size(view.min, vec2(view.width() * pr, 3.0)), ACCENT2, PINK);
-            if self.snap && !ctx.input(|i| i.pointer.any_down()) && raw_vel == 0.0 {
-                let base = view.height() * 0.35 + 46.0;
-                let target = base + ((off - base) / 330.0).round() * 330.0;
-                if (target - off).abs() > 1.0 && off > base - 150.0 {
-                    let mut st = out.state; st.offset.y += (target - off) * 0.2; st.store(ctx, out.id);
-                }
-            }
-        });
+
+        if let Some(i) = clicked { self.open = Some((i, now)); }
+        // ---------- detail modal ----------
+        if let Some((i, t0)) = self.open {
+            let e = ease(((now - t0) as f32) / 0.35);
+            let lp = ctx.layer_painter(LayerId::new(Order::Foreground, Id::new("backdrop")));
+            lp.rect_filled(screen, 0.0, Color32::from_rgba_unmultiplied(6, 4, 20, (190.0 * e) as u8));
+            let mr = Rect::from_center_size(screen.center() + vec2(0.0, (1.0 - e) * 40.0), vec2((screen.width() - 120.0).min(1100.0), (screen.height() - 120.0).min(720.0)) * (0.94 + 0.06 * e));
+            let top = LayerId::new(Order::Tooltip, Id::new("modal"));
+            let mp = ctx.layer_painter(top);
+            glass(&mp, mr, 30.0, 1.0, PINK);
+            mp.rect_filled(mr, 30.0, Color32::from_rgba_unmultiplied(20, 16, 48, 200));
+            let s = SECTIONS[i];
+            mp.text(mr.min + vec2(36.0, 30.0), Align2::LEFT_TOP, format!("No. {}", s.0), FontId::proportional(14.0), PINK);
+            glow_text(&mp, mr.min + vec2(36.0, 56.0), Align2::LEFT_TOP, s.3, 44.0, TEXT, PINK);
+            mp.text(mr.min + vec2(38.0, 118.0), Align2::LEFT_TOP, format!("English  ·  {}", s.2), FontId::proportional(18.0), Color32::from_rgb(205, 200, 255));
+            mp.text(mr.min + vec2(38.0, 146.0), Align2::LEFT_TOP, format!("日本語  ·  {}", s.1), FontId::proportional(18.0), Color32::from_rgb(205, 200, 255));
+            let close = Rect::from_center_size(mr.right_top() + vec2(-44.0, 44.0), vec2(40.0, 40.0));
+            mp.circle_filled(close.center(), 20.0, Color32::from_white_alpha(20)); mp.text(close.center(), Align2::CENTER_CENTER, "×", FontId::proportional(18.0), TEXT);
+            mp.text(mr.right_top() + vec2(-80.0, 44.0), Align2::RIGHT_CENTER, "Esc 關閉", FontId::proportional(12.0), MUTED);
+            let stage = Rect::from_min_max(mr.min + vec2(30.0, 186.0), mr.max - vec2(30.0, 30.0));
+            let t = (now - t0) as f32;
+            self.demo(ctx, Order::Debug, (i, 1), i, stage, screen, t, 0.5 + 0.5 * (nowf * 0.4).sin(), nowf, ptr, follow, vel);
+            let (pressed, pos) = ctx.input(|inp| (inp.pointer.primary_clicked(), inp.pointer.interact_pos()));
+            if pressed && (now - t0) > 0.2 { if let Some(q) = pos { if close.contains(q) || !mr.contains(q) { self.open = None; } } }
+        }
         ctx.request_repaint();
     }
 }
@@ -390,7 +527,7 @@ fn scene(p: &Painter, r: Rect, hue: f32, zoom: f32, pan: f32) { scene_a(p, r, hu
 /// same placeholder shot drawn at opacity `al` (for dissolves)
 fn scene_a(p: &Painter, r: Rect, hue: f32, zoom: f32, pan: f32, al: f32) {
     let pp = p.with_clip_rect(r);
-    pp.rect_filled(r, 0.0, hsv(hue).gamma_multiply(0.6 * al));
+    pp.rect_filled(r, 14.0, hsv(hue).gamma_multiply(0.6 * al));
     let c = r.center() + vec2(pan, 0.0);
     pp.circle_filled(c + vec2(80.0, -40.0) * zoom, 28.0 * zoom, Color32::from_rgb(255, 214, 165).gamma_multiply(al));
     for k in 0..3 { let x = c.x + (k as f32 - 1.0) * 140.0 * zoom; let b = r.bottom(); pp.add(Shape::convex_polygon(vec![pos2(x - 120.0 * zoom, b), pos2(x, b - (90.0 + k as f32 * 20.0) * zoom), pos2(x + 120.0 * zoom, b)], hsv(hue + 0.3 + k as f32 * 0.05).gamma_multiply(0.8 * al), Stroke::NONE)); }

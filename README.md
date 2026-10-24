@@ -4,14 +4,13 @@
 
 ## 執行
 ```bash
-cargo run --release
+git clone https://github.com/stevenke1981/anime-showcase.git
+cd anime-showcase
+cargo run --release                     # 或：./target/release/anime-showcase
+cargo run --release -- --goto 46        # 直接捲到 46 交叉溶接
+cargo run --release -- --open 65        # 直接打開 65 集中線 的放大視窗
 ```
-往下捲動，區塊進入畫面時會播放動畫（離開畫面再回來會重播）；部分效果（視差、縮放、文字填色、橫向捲動、Sticky 等）跟著捲動位置變化。上方「Replay 重播」可全部重播，「Scroll snap」可開啟吸附，「跳至」下拉選單可直接跳到任一效果；懸停類效果請把滑鼠移上去（帶慣性跟隨）。
-
-直接開到指定編號：
-```bash
-cargo run --release -- --goto 46   # 從 46 交叉溶接開始
-```
+開場是全螢幕 Hero，往下捲動進入五個章節；每個章節是不同大小的玻璃卡片（Bento 網格），卡片進入畫面時播放動畫、離開再回來會重播。滑鼠移到卡片上會浮起並發光，**點擊卡片可放大檢視**（Esc 或點外面關閉）。上方懸浮導覽列可跳到各章節，⟲ 重播全部動畫。
 
 ## 動畫術語一覽（共 91 種，分 5 類）
 
@@ -127,15 +126,15 @@ cargo run --release -- --goto 46   # 從 46 交叉溶接開始
 | 91 | 老電影閃爍刮痕 | Old film flicker / scratches | 古いフィルムのちらつき |
 
 ## 截圖
-![](shots/after_home.png)
-![](shots/after_web.png)
-![](shots/after_video.png)
-![](shots/after_anime.png)
-![](shots/after_film.png)
+![](shots/dreamy_hero.png)
+![](shots/dreamy_chapter.png)
+![](shots/dreamy_ui.png)
+![](shots/dreamy_film.png)
+![](shots/dreamy_detail.png)
 
 
-## 介面
-深色海軍藍主題、圓角卡片與柔和陰影、左側分類導覽（點擊跳轉）、頂部漸層進度條、編號徽章與中／英／日標題。
+## 介面（v0.3 夢幻版）
+全螢幕 Hero（發光標題、極光／星雲漸層背景、漂浮星光與散景、視差）、全寬沉浸式章節分隔、玻璃擬態（glassmorphism）Bento 卡片（大小不一、精選大卡、懸停浮起發光）、點擊放大詳情視窗、懸浮膠囊導覽列，動態背景貫穿整頁。
 
 ## 限制
 這是原生桌面程式，用 egui 模擬網頁效果：模糊、3D 傾斜、圖片序列、SVG 描線、景深、鏡頭光暈、CRT 等都是近似畫法，並不是真正的 CSS/SVG。
